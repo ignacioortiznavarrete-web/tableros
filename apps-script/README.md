@@ -11,8 +11,7 @@ Solicitud → PMO → ┬ Costos ┬ → Planificación → Producción* → Ope
 - \* **Producción** sólo si la solicitud marca *¿Requiere producción? = Sí*.
 - \* **Operaciones Portuarias** (hoja `Exportacion`) sólo si marca *¿Es de exportación? = Sí*.
 
-Todo
-sobre la planilla *Tableros*.
+Todo se registra en la planilla *Tableros*.
 
 ## Archivos
 
