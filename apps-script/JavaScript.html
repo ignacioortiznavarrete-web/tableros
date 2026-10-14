@@ -43,6 +43,16 @@
   function norm(v) { return String(v || '').replace(/\s+/g, ' ').trim().toUpperCase(); }
   function unicos(arr) { return arr.filter(function (x, i) { return arr.indexOf(x) === i; }); }
   function etapa(id) { return APP.data.etapas.filter(function (e) { return e.id === id; })[0]; }
+  function idxEtapa(id) { return APP.data.etapas.findIndex(function (e) { return e.id === id; }); }
+  function estadoDe(s, id) { return s.etapas[idxEtapa(id)] || {}; }
+  /** La etapa `id` tiene trabajo pendiente en la solicitud `s`. */
+  function pendienteEn(s, id) {
+    const st = estadoDe(s, id);
+    return s.etapaActual === etapa(id).paso && st.aplica && st.estado !== 'Aprobado';
+  }
+  function etiquetaCondicion(c) {
+    return c === 'exportacion' ? 'Sólo exportación' : c === 'produccion' ? 'Si requiere producción' : '';
+  }
   function esMio(id) { return APP.data.roles.indexOf(id) >= 0; }
   function nombreDesdeCorreo(email) {
     return String(email || '').split('@')[0].split(/[._-]+/).filter(Boolean)
@@ -91,25 +101,39 @@
 
   function renderFlow() {
     const sols = APP.data.solicitudes;
-    const pasos = [{ id: 'SOLICITUD', nombre: 'Solicitud', meta: sols.length + ' en total', icon: '+' }]
-      .concat(APP.data.etapas.map(function (e, i) {
-        const n = sols.filter(function (s) { return s.etapaActual === e.id; }).length;
-        return { id: e.id, nombre: e.nombre, meta: n ? n + ' en curso' : 'Sin pendientes', icon: String(i + 1), n: n };
-      }));
-
-    document.getElementById('flow').innerHTML = pasos.map(function (p) {
-      const cls = ['flow-step'];
-      if (p.id === APP.vista) cls.push('active');
-      if (p.n) cls.push('has-work');
-      const mio = p.id === 'SOLICITUD' ? esMio('PMO') : esMio(p.id);
-      return '<button class="' + cls.join(' ') + '" data-vista="' + p.id + '">' +
-        '<span class="flow-dot">' + esc(p.icon) +
-          (p.n && mio ? '<span class="flow-badge">' + p.n + '</span>' : '') + '</span>' +
-        '<span class="flow-label">' + esc(p.nombre) + '</span>' +
-        '<span class="flow-meta">' + esc(p.meta) + '</span>' +
+    function nodo(e, num, sub) {
+      const n = sols.filter(function (s) { return pendienteEn(s, e.id); }).length;
+      const cls = [sub ? 'flow-sub' : 'flow-step'];
+      if (e.id === APP.vista) cls.push('active');
+      if (n) cls.push('has-work');
+      const mio = esMio(e.id);
+      const cond = etiquetaCondicion(e.condicion);
+      return '<button class="' + cls.join(' ') + '" data-vista="' + e.id + '">' +
+        '<span class="flow-dot">' + esc(num) +
+          (n && mio ? '<span class="flow-badge">' + n + '</span>' : '') + '</span>' +
+        '<span class="flow-label">' + esc(e.nombre) + '</span>' +
+        '<span class="flow-meta">' + (n ? n + ' pendiente' + (n > 1 ? 's' : '') : 'Sin pendientes') + '</span>' +
+        (cond ? '<span class="flow-cond">' + esc(cond) + '</span>' : '') +
         (mio ? '<span class="flow-mine">Tu etapa</span>' : '') +
         '</button>';
-    }).join('');
+    }
+
+    let html = '<button class="flow-step' + (APP.vista === 'SOLICITUD' ? ' active' : '') + '" data-vista="SOLICITUD">' +
+      '<span class="flow-dot">+</span><span class="flow-label">Solicitud</span>' +
+      '<span class="flow-meta">' + sols.length + ' en total</span>' +
+      (esMio('PMO') ? '<span class="flow-mine">Tu etapa</span>' : '') + '</button>';
+
+    APP.data.pasos.forEach(function (p, i) {
+      const num = String(i + 1);
+      if (p.etapas.length === 1) { html += nodo(etapa(p.etapas[0]), num, false); return; }
+      html += '<div class="flow-step split">' +
+        '<div class="flow-split">' +
+          p.etapas.map(function (id, j) { return nodo(etapa(id), num + String.fromCharCode(97 + j), true); }).join('') +
+        '</div>' +
+        '<span class="flow-group">' + esc(p.nombre) + ' · en paralelo</span>' +
+        '</div>';
+    });
+    document.getElementById('flow').innerHTML = html;
   }
 
   document.getElementById('flow').addEventListener('click', function (ev) {
@@ -194,6 +218,13 @@
           '<input class="input" name="proyecto" placeholder="Ej. Línea Melamina Norte"></div>' +
         '<div class="field"><label>Solicitante <span class="req">*</span></label>' +
           '<input class="input" name="solicitante" value="' + esc(nombreDesdeCorreo(d.usuario)) + '"></div>' +
+        '<div class="field"><label>¿Es de exportación? <span class="req">*</span></label>' +
+          '<select class="select" name="exportacion"><option value="">Selecciona…</option><option>Sí</option><option>No</option></select>' +
+          '<span class="hint">Si es Sí, se agrega Operaciones Portuarias al final.</span></div>' +
+        '<div class="field"><label>¿Requiere producción? <span class="req">*</span></label>' +
+          '<select class="select" name="produccion"><option value="">Selecciona…</option><option>Sí</option><option>No</option></select>' +
+          '<span class="hint">Si es Sí, se agrega Producción antes de Operaciones.</span></div>' +
+        '<div class="route" id="ruta"></div>' +
       '</div>' +
 
       '<div class="section-title">Material</div>' +
@@ -276,6 +307,17 @@
     inMat.addEventListener('input', function () { if (filasMaterial().length || !inMat.value) onMaterial(); });
     selTipo.addEventListener('change', onTipo);
     selSub.addEventListener('change', onSub);
+    function onRuta() {
+      const flags = { exportacion: form.elements.exportacion.value === 'Sí', produccion: form.elements.produccion.value === 'Sí' };
+      const pasos = APP.data.pasos.filter(function (p) { return !p.condicion || flags[p.condicion]; }).map(function (p) {
+        return p.etapas.map(function (id) { return etapa(id).nombre; }).join(' + ');
+      });
+      document.getElementById('ruta').innerHTML = '<b>Recorrido:</b> Solicitud → ' + pasos.map(esc).join(' → ');
+    }
+    form.elements.exportacion.addEventListener('change', onRuta);
+    form.elements.produccion.addEventListener('change', onRuta);
+    form.addEventListener('reset', function () { setTimeout(onRuta, 0); });
+    onRuta();
     form.addEventListener('reset', function () { setTimeout(onMaterial, 0); });
     form.addEventListener('submit', enviarSolicitud);
   }
@@ -291,6 +333,8 @@
       material: el.material.value,
       tipo: el.tipo.value,
       subfamilia: el.subfamilia.value,
+      exportacion: el.exportacion.value,
+      produccion: el.produccion.value,
       factibilidad: {}
     };
 
@@ -300,6 +344,8 @@
     function marcar(control, etiqueta) { control.classList.add('invalid'); faltan.push(etiqueta); }
     if (!datos.proyecto.trim()) marcar(el.proyecto, 'Proyecto');
     if (!datos.solicitante.trim()) marcar(el.solicitante, 'Solicitante');
+    if (!datos.exportacion) marcar(el.exportacion, '¿Es de exportación?');
+    if (!datos.produccion) marcar(el.produccion, '¿Requiere producción?');
     const valido = APP.data.catalogo.some(function (x) {
       return norm(x.d) === norm(datos.material) && x.t === datos.tipo && x.s === datos.subfamilia;
     });
@@ -360,7 +406,7 @@
   function vistaEtapa(id) {
     const e = etapa(id);
     const todas = APP.data.solicitudes;
-    const enEtapa = todas.filter(function (s) { return s.etapaActual === id; });
+    const enEtapa = todas.filter(function (s) { return pendienteEn(s, id); });
     let lista = APP.filtro === 'etapa' ? enEtapa : todas;
     const q = norm(APP.busqueda);
     if (q) {
@@ -371,7 +417,10 @@
 
     const head = '<div class="view-head"><div>' +
       '<h1>' + esc(e.nombre) + '</h1>' +
-      '<p>Responsable: ' + esc(e.emails.join(', ')) +
+      '<p>' + (APP.data.pasos.filter(function (p) { return p.id === e.paso; })[0].etapas.length > 1 ?
+          'Liberación en paralelo · ' : '') +
+        (e.condicion ? esc(etiquetaCondicion(e.condicion)) + ' · ' : '') +
+        'Responsable: ' + esc(e.emails.join(', ') || 'sin definir') +
         (esMio(id) ? ' · <b style="color:var(--primary-2)">Puedes cambiar el estado y comentar</b>' : ' · Sólo lectura') + '</p>' +
       '</div><div class="toolbar">' +
         '<div class="chips">' +
@@ -389,24 +438,40 @@
     return head + cuerpo;
   }
 
-  function nodos(s) {
-    const n = [{ nombre: 'Solicitud', cls: 'done', estado: 'Creada', icon: '✓' }];
-    APP.data.etapas.forEach(function (e, i) {
-      const st = s.etapas[i] || {};
-      let cls = '', icon = String(i + 1), estado = '—';
-      if (st.estado === 'Aprobado') { cls = 'done'; icon = '✓'; estado = 'Aprobado'; }
-      else if (st.estado === 'Rechazado') { cls = 'rejected'; icon = '✕'; estado = 'Rechazado'; }
-      else if (s.etapaActual === e.id) { cls = 'current'; estado = st.estado || 'Pendiente'; }
-      n.push({ nombre: e.nombre, cls: cls, estado: estado, icon: icon });
+  function nodoEtapa(s, e, num) {
+    const st = estadoDe(s, e.id);
+    let cls = '', icon = num, estado = '—';
+    if (!st.aplica) { cls = 'na'; estado = 'No aplica'; icon = '–'; }
+    else if (st.estado === 'Aprobado') { cls = 'done'; icon = '✓'; estado = 'Aprobado'; }
+    else if (st.estado === 'Rechazado') { cls = 'rejected'; icon = '✕'; estado = 'Rechazado'; }
+    else if (s.etapaActual === e.paso) { cls = 'current'; estado = st.estado || 'Pendiente'; }
+    return { nombre: e.nombre, cls: cls, estado: estado, icon: icon };
+  }
+
+  function miniTimeline(s) {
+    function sub(x) {
+      return '<div class="tl-dot">' + esc(x.icon) + '</div>' +
+        '<div class="tl-name">' + esc(x.nombre) + '</div><div class="tl-state">' + esc(x.estado) + '</div>';
+    }
+    let html = '<div class="tl-step done">' + sub({ nombre: 'Solicitud', estado: 'Creada', icon: '✓' }) + '</div>';
+    APP.data.pasos.forEach(function (p, i) {
+      const nodos = p.etapas.map(function (id, j) {
+        return nodoEtapa(s, etapa(id), p.etapas.length > 1 ? String(i + 1) + String.fromCharCode(97 + j) : String(i + 1));
+      });
+      // Clase del paso: el peor estado manda (rechazo > en curso > aprobado)
+      const clases = nodos.map(function (n) { return n.cls; });
+      const cls = clases.indexOf('rejected') >= 0 ? 'rejected' : clases.indexOf('current') >= 0 ? 'current' :
+        clases.every(function (c) { return c === 'done'; }) ? 'done' : clases.every(function (c) { return c === 'na'; }) ? 'na' : '';
+      if (nodos.length === 1) { html += '<div class="tl-step ' + cls + '">' + sub(nodos[0]) + '</div>'; return; }
+      html += '<div class="tl-step split ' + cls + '"><div class="tl-pair">' + nodos.map(function (n) {
+        return '<div class="tl-sub ' + n.cls + '">' + sub(n) + '</div>';
+      }).join('') + '</div></div>';
     });
-    return n;
+    return '<div class="tl">' + html + '</div>';
   }
 
   function tarjeta(s, vista) {
-    const tl = '<div class="tl">' + nodos(s).map(function (x) {
-      return '<div class="tl-step ' + x.cls + '"><div class="tl-dot">' + esc(x.icon) + '</div>' +
-        '<div class="tl-name">' + esc(x.nombre) + '</div><div class="tl-state">' + esc(x.estado) + '</div></div>';
-    }).join('') + '</div>';
+    const tl = miniTimeline(s);
 
     const links = '<div class="req-links">' +
       (s.factibilidadUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.factibilidadUrl) + '">📄 Factibilidad</a>' : '') +
@@ -414,12 +479,16 @@
       (s.griffing ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.griffing) + '">Griffing</a>' : '') +
       '</div>';
 
-    const puedeActuar = s.etapaActual === vista && esMio(vista);
+    const puedeActuar = APP.vista !== 'SOLICITUD' && pendienteEn(s, vista) && esMio(vista);
     let accion = '';
     if (puedeActuar) {
-      const idx = APP.data.etapas.findIndex(function (e) { return e.id === vista; });
-      const st = s.etapas[idx] || {};
-      const sig = APP.data.etapas[idx + 1];
+      const st = estadoDe(s, vista);
+      const paso = APP.data.pasos.filter(function (p) { return p.id === etapa(vista).paso; })[0];
+      const otras = paso.etapas.filter(function (id) { return id !== vista && estadoDe(s, id).estado !== 'Aprobado'; });
+      const iPaso = APP.data.pasos.indexOf(paso);
+      const sig = APP.data.pasos.slice(iPaso + 1).filter(function (p) {
+        return !p.condicion || s[p.condicion];
+      })[0];
       accion = '<form class="act" data-num="' + esc(s.numero) + '" data-etapa="' + esc(vista) + '">' +
         '<div class="act-title">✎ Actualizar etapa ' + esc(etapa(vista).nombre) + '</div>' +
         '<div class="fields">' +
@@ -427,7 +496,9 @@
             APP.data.estados.map(function (e) {
               return '<option' + ((st.estado || 'Pendiente') === e ? ' selected' : '') + '>' + esc(e) + '</option>';
             }).join('') + '</select>' +
-            '<span class="hint">' + (sig ? 'Al aprobar pasa a ' + esc(sig.nombre) + '.' : 'Al aprobar la solicitud se finaliza.') + '</span></div>' +
+            '<span class="hint">' + (otras.length ? 'Al aprobar, espera la liberación de ' +
+              esc(otras.map(function (id) { return etapa(id).nombre; }).join(', ')) + '.' :
+              sig ? 'Al aprobar pasa a ' + esc(sig.nombre) + '.' : 'Al aprobar la solicitud se finaliza.') + '</span></div>' +
           '<div class="field"><label>Comentario</label><textarea class="textarea" name="comentario" placeholder="Obligatorio si rechazas">' +
             esc(st.comentario || '') + '</textarea></div>' +
         '</div>' +
@@ -437,7 +508,7 @@
 
     const notas = APP.data.etapas.map(function (e, i) {
       const st = s.etapas[i] || {};
-      if (!st.estado) return '';
+      if (!st.estado || !st.aplica) return '';
       return '<div class="note"><h4>' + esc(e.nombre) + '</h4>' +
         '<span class="pill ' + clasePill(st.estado) + '">' + esc(st.estado) + '</span>' +
         (st.comentario ? '<p>' + esc(st.comentario) + '</p>' : '') +
@@ -461,6 +532,8 @@
           '<span>Subfamilia: <b>' + esc(s.subfamilia) + '</b></span>' +
           '<span>Solicitante: <b>' + esc(s.solicitante) + '</b></span>' +
           '<span>' + esc(s.fecha) + '</span>' +
+          (s.exportacion ? '<span class="tag">Exportación</span>' : '') +
+          (s.produccion ? '<span class="tag">Producción</span>' : '') +
         '</div></div>' +
         '<span class="pill ' + clasePill(s.estado) + '">' + esc(s.estado) + '</span>' +
       '</div>' +
@@ -483,9 +556,11 @@
     if (ir) {
       const s = APP.data.solicitudes.filter(function (x) { return x.numero === ir.dataset.ir; })[0];
       if (!s) return;
-      const enCurso = APP.data.etapas.some(function (e) { return e.id === s.etapaActual; });
-      APP.vista = enCurso ? s.etapaActual : APP.data.etapas[APP.data.etapas.length - 1].id;
-      APP.filtro = enCurso ? 'etapa' : 'todas';
+      const pend = APP.data.etapas.filter(function (e) { return pendienteEn(s, e.id); });
+      const mia = pend.filter(function (e) { return esMio(e.id); })[0];
+      const destino = mia || pend[0];
+      APP.vista = destino ? destino.id : 'PMO';
+      APP.filtro = destino ? 'etapa' : 'todas';
       APP.busqueda = '';
       APP.foco = s.numero;
       render();

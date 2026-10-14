@@ -1,6 +1,17 @@
 # Solicitudes de Materiales · Tableros (Google Apps Script)
 
-Web App que gestiona el flujo **Solicitud → PMO → Costos → Planificación → Operaciones**
+Web App que gestiona el flujo
+
+```
+Solicitud → PMO → ┬ Costos ┬ → Planificación → Producción* → Operaciones → Operaciones Portuarias*
+                  └ T&D    ┘
+```
+
+- **Costos y T&D** son liberaciones en paralelo: el flujo se divide y sólo continúa cuando ambas aprueban.
+- \* **Producción** sólo si la solicitud marca *¿Requiere producción? = Sí*.
+- \* **Operaciones Portuarias** (hoja `Exportacion`) sólo si marca *¿Es de exportación? = Sí*.
+
+Todo
 sobre la planilla *Tableros*.
 
 ## Archivos
@@ -21,11 +32,19 @@ sobre la planilla *Tableros*.
 3. Ejecutar una vez la función **`configurarHojas`** desde el editor y aceptar los permisos
    (crea encabezados faltantes y la hoja `Historial`; no sobrescribe los encabezados existentes).
 4. **Implementar → Nueva implementación → Aplicación web**
-   - Ejecutar como: **Yo**
-   - Quién tiene acceso: **Cualquier usuario de masisa.com**
-5. Compartir la URL de la Web App con los responsables.
+   - Ejecutar como: **Usuario que accede a la aplicación web**
+   - Quién tiene acceso: **Cualquier usuario con cuenta de Google**
+   (necesario porque Producción usa una cuenta @gmail.com; con "Ejecutar como: Yo" Google no
+   entrega el correo de usuarios fuera de masisa.com).
+5. Compartir **como Editor** con todos los responsables (incluida la cuenta gmail):
+   la planilla *Tableros* y la carpeta *Factibilidad*.
+6. Compartir la URL de la Web App. Cada usuario autoriza los permisos la primera vez que entra.
 
-> La cuenta que implementa debe tener edición en la planilla y en la carpeta de Drive de factibilidad.
+> Si el administrador de Google Workspace de Masisa bloquea compartir con cuentas externas,
+> Producción debe usar una cuenta @masisa.com.
+>
+> Si ya existía una implementación, usar **Gestionar implementaciones → Editar → Nueva versión**
+> para mantener la misma URL.
 
 ## Reglas de negocio
 
@@ -39,16 +58,20 @@ sobre la planilla *Tableros*.
   Se crea un Google Sheet `Factibilidad SOL-XXXX - <Proyecto>` en
   `Carpeta Factibilidad / <Solicitante> / <Proyecto>`. Las carpetas del solicitante y del proyecto
   se reutilizan si ya existen. Las respuestas también quedan en la hoja `Factibilidad`.
-- **Hojas**: la solicitud se guarda en `Solicitudes PMO`; cada etapa escribe su fila en
-  `Costos`, `Planificacion` y `Operaciones`; todos los movimientos quedan en `Historial`.
+- **Hojas**: la solicitud se guarda en `Solicitudes PMO` (columnas *Exportación* y *Requiere producción*
+  al final); cada etapa escribe su fila en `Costos`, `T&D`, `Planificacion`, `Produccion`,
+  `Operaciones` y `Exportacion`; todos los movimientos quedan en `Historial`.
 - **Permisos por etapa** (`ETAPAS` en `Code.gs`):
 
   | Etapa | Responsable |
   |---|---|
   | PMO (crea y aprueba) | jose.ortiz@masisa.com |
-  | Costos | giovanna.espinoza@masisa.com |
+  | Costos (liberación en paralelo) | giovanna.espinoza@masisa.com |
+  | T&D (liberación en paralelo) | **por definir** |
   | Planificación | codificacion.corporativa@masisa.com |
+  | Producción (si aplica) | ignacio.ortiznavarrete@gmail.com |
   | Operaciones | ramiro.gonzalez@masisa.com |
+  | Operaciones Portuarias (si es exportación) | **por definir** |
 
   Sólo el responsable puede cambiar el estado (*Pendiente, En revisión, Aprobado, Rechazado*) y
   comentar, y sólo cuando la solicitud está en su etapa. Al **aprobar** pasa a la siguiente etapa

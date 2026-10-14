@@ -2,16 +2,19 @@
  * ============================================================================
  *  Tableros · Flujo de Solicitudes de Materiales
  * ----------------------------------------------------------------------------
- *  Solicitud → PMO → Costos → Planificación → Operaciones
+ *  Solicitud → PMO → [Costos ‖ T&D] → Planificación → Producción* →
+ *  Operaciones → Operaciones Portuarias*
  *
- *  - El PMO ingresa la solicitud (proyecto, material, tipo de material,
- *    subfamilia y preguntas de factibilidad).
+ *     ‖  = liberaciones en paralelo: ambas deben aprobar para continuar.
+ *     *  = etapa condicional (Producción si "¿Requiere producción?" = Sí,
+ *          Operaciones Portuarias si "¿Es de exportación?" = Sí).
+ *
  *  - El material se valida contra la hoja "Reglas":
  *        Columna A = Descripción (Material)
  *        Columna E = Tipo Material (PT)
  *        Columna F = Subfamilia
  *    La combinación debe existir en una misma fila; si no, no se guarda.
- *  - Se crea en Drive:  <Carpeta raíz>/<Solicitante>/<Proyecto>/Factibilidad …
+ *  - Se crea en Drive:  <Carpeta Factibilidad>/<Solicitante>/<Proyecto>/…
  *    (las carpetas se reutilizan si ya existen).
  *  - Cada etapa sólo puede ser modificada por su(s) correo(s) responsable(s).
  * ============================================================================
@@ -19,7 +22,8 @@
 
 const CONFIG = {
   SPREADSHEET_ID: '15CthLu7g7xMfp6KNg8veRVQQS0sah7QRbRCpoSEOoLo',
-  CARPETA_FACTIBILIDAD_ID: '1_Y0B8odDYs_I9MAMtG39jqv9AB-ZUugJ',
+  // Carpeta "Factibilidad"
+  CARPETA_FACTIBILIDAD_ID: '1_TUpugpBYRbKoWwu9znBkMCNmc4b9aPG',
   PREFIJO_SOLICITUD: 'SOL-',
   NOTIFICAR_POR_CORREO: true,
   ZONA_HORARIA: 'America/Santiago',
@@ -34,13 +38,28 @@ const CONFIG = {
   ADMINS: []
 };
 
-/** Etapas del flujo en orden. `emails` = quienes pueden cambiar el estado. */
+/**
+ * Etapas del flujo en orden.
+ *  - emails:    quienes pueden cambiar el estado de la etapa.
+ *  - paso:      etapas con el mismo paso corren en paralelo y deben aprobarse
+ *               todas para avanzar (se divide y se vuelve a juntar).
+ *  - condicion: la etapa sólo aplica si la solicitud marcó esa opción.
+ */
 const ETAPAS = [
-  { id: 'PMO',           nombre: 'PMO',           emails: ['jose.ortiz@masisa.com'],               hoja: null },
-  { id: 'COSTOS',        nombre: 'Costos',        emails: ['giovanna.espinoza@masisa.com'],        hoja: 'Costos' },
-  { id: 'PLANIFICACION', nombre: 'Planificación', emails: ['codificacion.corporativa@masisa.com'], hoja: 'Planificacion' },
-  { id: 'OPERACIONES',   nombre: 'Operaciones',   emails: ['ramiro.gonzalez@masisa.com'],          hoja: 'Operaciones' }
+  { id: 'PMO',           nombre: 'PMO',                    emails: ['jose.ortiz@masisa.com'],               hoja: null,            paso: 'PMO' },
+  { id: 'COSTOS',        nombre: 'Costos',                 emails: ['giovanna.espinoza@masisa.com'],        hoja: 'Costos',        paso: 'LIBERACIONES' },
+  { id: 'TYD',           nombre: 'T&D',                    emails: [/* TODO: correo responsable T&D */],    hoja: 'T&D',           paso: 'LIBERACIONES' },
+  { id: 'PLANIFICACION', nombre: 'Planificación',          emails: ['codificacion.corporativa@masisa.com'], hoja: 'Planificacion', paso: 'PLANIFICACION' },
+  { id: 'PRODUCCION',    nombre: 'Producción',             emails: ['ignacio.ortiznavarrete@gmail.com'],    hoja: 'Produccion',    paso: 'PRODUCCION',    condicion: 'produccion' },
+  { id: 'OPERACIONES',   nombre: 'Operaciones',            emails: ['ramiro.gonzalez@masisa.com'],          hoja: 'Operaciones',   paso: 'OPERACIONES' },
+  { id: 'OP_PORTUARIAS', nombre: 'Operaciones Portuarias', emails: [/* TODO: correo Op. Portuarias */],     hoja: 'Exportacion',   paso: 'OP_PORTUARIAS', condicion: 'exportacion' }
 ];
+
+/** Nombre a mostrar para pasos con más de una etapa. */
+const NOMBRE_PASO = { LIBERACIONES: 'Liberaciones' };
+
+/** Compatibilidad con solicitudes creadas antes de las liberaciones en paralelo. */
+const ALIAS_PASO = { COSTOS: 'LIBERACIONES' };
 
 const ESTADOS = ['Pendiente', 'En revisión', 'Aprobado', 'Rechazado'];
 
@@ -67,12 +86,13 @@ const PREGUNTAS_FACTIBILIDAD = [
 const COL_SOL = {
   NUMERO: 1, MATERIAL: 2, FACTIBILIDAD: 3, GRIFFING: 4, ESTADO: 5, SOLICITANTE: 6,
   PROYECTO: 7, TIPO: 8, SUBFAMILIA: 9, FECHA: 10, ETAPA: 11, ESTADO_PMO: 12,
-  COMENTARIO_PMO: 13, CORREO: 14, CARPETA: 15, ACTUALIZADO: 16
+  COMENTARIO_PMO: 13, CORREO: 14, CARPETA: 15, ACTUALIZADO: 16, EXPORTACION: 17, PRODUCCION: 18
 };
 const ENC_SOL = [
   'Numero de solicitud', 'Material', 'Factibilidad', 'Griffing', 'Estado', 'Solicitante',
   'Proyecto', 'Tipo Material', 'Subfamilia', 'Fecha solicitud', 'Etapa actual', 'Estado PMO',
-  'Comentario PMO', 'Correo solicitante', 'Carpeta proyecto', 'Última actualización'
+  'Comentario PMO', 'Correo solicitante', 'Carpeta proyecto', 'Última actualización',
+  'Exportación', 'Requiere producción'
 ];
 
 const COL_ETAPA = { NUMERO: 1, MATERIAL: 2, FACTIBILIDAD: 3, ESTADO: 4, COMENTARIO: 5, RESPONSABLE: 6, ACTUALIZADO: 7 };
@@ -103,7 +123,12 @@ function getInicio() {
   return {
     usuario: usuario,
     roles: ETAPAS.filter(function (e) { return puede_(usuario, e.id); }).map(function (e) { return e.id; }),
-    etapas: ETAPAS.map(function (e) { return { id: e.id, nombre: e.nombre, emails: e.emails }; }),
+    etapas: ETAPAS.map(function (e) {
+      return { id: e.id, nombre: e.nombre, emails: e.emails, paso: e.paso, condicion: e.condicion || '' };
+    }),
+    pasos: pasos_().map(function (p) {
+      return { id: p.id, nombre: p.nombre, etapas: p.etapas.map(function (e) { return e.id; }), condicion: p.condicion };
+    }),
     estados: ESTADOS,
     preguntas: PREGUNTAS_FACTIBILIDAD,
     catalogo: getCatalogo_(),
@@ -115,6 +140,54 @@ function getInicio() {
 function getSolicitudes() {
   usuarioActual_();
   return listarSolicitudes_();
+}
+
+/* ============================================================================
+ *  Pasos del flujo
+ * ========================================================================== */
+
+/** Agrupa las etapas en pasos respetando el orden de ETAPAS. */
+function pasos_() {
+  const lista = [];
+  ETAPAS.forEach(function (e) {
+    let p = lista.filter(function (x) { return x.id === e.paso; })[0];
+    if (!p) {
+      p = { id: e.paso, nombre: NOMBRE_PASO[e.paso] || e.nombre, etapas: [], condicion: e.condicion || '' };
+      lista.push(p);
+    }
+    p.etapas.push(e);
+  });
+  return lista;
+}
+
+function paso_(id) {
+  return pasos_().filter(function (p) { return p.id === id; })[0] || null;
+}
+
+function aplica_(etapaOPaso, flags) {
+  return !etapaOPaso.condicion || !!flags[etapaOPaso.condicion];
+}
+
+function flagsFila_(r) {
+  return {
+    exportacion: esSi_(r[COL_SOL.EXPORTACION - 1]),
+    produccion: esSi_(r[COL_SOL.PRODUCCION - 1])
+  };
+}
+
+function pasoActualFila_(r) {
+  const v = String(r[COL_SOL.ETAPA - 1] || '').trim();
+  return ALIAS_PASO[v] || v;
+}
+
+/** Siguiente paso aplicable después de `pasoId`, o null si es el último. */
+function siguientePaso_(pasoId, flags) {
+  const lista = pasos_();
+  const i = lista.findIndex(function (p) { return p.id === pasoId; });
+  for (let j = i + 1; j < lista.length; j++) {
+    if (aplica_(lista[j], flags)) return lista[j];
+  }
+  return null;
 }
 
 /* ============================================================================
@@ -131,6 +204,10 @@ function crearSolicitud(datos) {
   const solicitante = limpiar_(datos && datos.solicitante);
   if (!proyecto) throw new Error('Debes indicar el nombre del proyecto.');
   if (!solicitante) throw new Error('Debes indicar el nombre del solicitante.');
+  const exportacion = limpiar_(datos.exportacion);
+  const produccion = limpiar_(datos.produccion);
+  if (['Sí', 'No'].indexOf(exportacion) < 0) throw new Error('Indica si la solicitud es de exportación.');
+  if (['Sí', 'No'].indexOf(produccion) < 0) throw new Error('Indica si la solicitud requiere producción.');
 
   const mat = validarMaterial_(datos.material, datos.tipo, datos.subfamilia);
   const respuestas = validarFactibilidad_(datos.factibilidad || {});
@@ -145,7 +222,8 @@ function crearSolicitud(datos) {
     const carpeta = carpetaProyecto_(solicitante, proyecto);
     const archivo = crearArchivoFactibilidad_(carpeta, {
       numero: numero, proyecto: proyecto, solicitante: solicitante, correo: usuario,
-      fecha: ahora, material: mat, respuestas: respuestas
+      fecha: ahora, material: mat, respuestas: respuestas,
+      exportacion: exportacion, produccion: produccion
     });
 
     const fila = new Array(ENC_SOL.length).fill('');
@@ -165,10 +243,13 @@ function crearSolicitud(datos) {
     fila[COL_SOL.CORREO - 1] = usuario;
     fila[COL_SOL.CARPETA - 1] = carpeta.getUrl();
     fila[COL_SOL.ACTUALIZADO - 1] = ahora;
+    fila[COL_SOL.EXPORTACION - 1] = exportacion;
+    fila[COL_SOL.PRODUCCION - 1] = produccion;
     sh.appendRow(fila);
 
     registrarFactibilidad_(numero, respuestas, archivo.getUrl(), ahora);
-    registrarHistorial_(numero, 'Solicitud', 'Creada', 'Proyecto: ' + proyecto, usuario, ahora);
+    registrarHistorial_(numero, 'Solicitud', 'Creada',
+      'Proyecto: ' + proyecto + ' · Exportación: ' + exportacion + ' · Producción: ' + produccion, usuario, ahora);
     SpreadsheetApp.flush();
 
     return {
@@ -188,13 +269,12 @@ function crearSolicitud(datos) {
 
 function actualizarEtapa(numero, etapaId, estado, comentario) {
   const usuario = usuarioActual_();
-  const idx = ETAPAS.findIndex(function (e) { return e.id === etapaId; });
-  if (idx < 0) throw new Error('Etapa desconocida: ' + etapaId);
-  const etapa = ETAPAS[idx];
+  const etapa = etapa_(etapaId);
+  if (!etapa) throw new Error('Etapa desconocida: ' + etapaId);
 
   if (!puede_(usuario, etapaId)) {
     throw new Error('No tienes permiso para modificar la etapa ' + etapa.nombre +
-      '. Responsable: ' + etapa.emails.join(', '));
+      '. Responsable: ' + (etapa.emails.join(', ') || 'sin definir'));
   }
   if (ESTADOS.indexOf(estado) < 0) throw new Error('Estado no válido: ' + estado);
   comentario = String(comentario || '').trim();
@@ -203,19 +283,25 @@ function actualizarEtapa(numero, etapaId, estado, comentario) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   let siguiente = null;
+  let finalizada = false;
   let datosCorreo;
   try {
     const sh = hoja_(CONFIG.HOJAS.SOLICITUDES, ENC_SOL);
     const fila = buscarFila_(sh, numero);
     if (!fila) throw new Error('No existe la solicitud ' + numero);
     const r = sh.getRange(fila, 1, 1, ENC_SOL.length).getValues()[0];
+    const flags = flagsFila_(r);
+    const pasoActual = pasoActualFila_(r);
 
-    const etapaActual = String(r[COL_SOL.ETAPA - 1] || '');
-    if (etapaActual === ETAPA_FINALIZADA) throw new Error('La solicitud ' + numero + ' ya está finalizada.');
-    if (etapaActual !== etapaId) {
-      const actual = etapa_(etapaActual);
-      throw new Error('La solicitud ' + numero + ' se encuentra en la etapa ' +
-        (actual ? actual.nombre : etapaActual) + '. Aún no puedes modificar ' + etapa.nombre + '.');
+    if (pasoActual === ETAPA_FINALIZADA) throw new Error('La solicitud ' + numero + ' ya está finalizada.');
+    if (!aplica_(etapa, flags)) throw new Error('La etapa ' + etapa.nombre + ' no aplica a la solicitud ' + numero + '.');
+    if (etapa.paso !== pasoActual) {
+      const p = paso_(pasoActual);
+      throw new Error('La solicitud ' + numero + ' se encuentra en ' + (p ? p.nombre : pasoActual) +
+        '. Aún no puedes modificar ' + etapa.nombre + '.');
+    }
+    if (estadoEtapa_(etapa, numero, r) === 'Aprobado') {
+      throw new Error(etapa.nombre + ' ya aprobó la solicitud ' + numero + '.');
     }
 
     const ahora = new Date();
@@ -224,30 +310,42 @@ function actualizarEtapa(numero, etapaId, estado, comentario) {
 
     if (etapa.id === 'PMO') {
       sh.getRange(fila, COL_SOL.ESTADO_PMO, 1, 2).setValues([[estado, seguro_(comentario)]]);
+      r[COL_SOL.ESTADO_PMO - 1] = estado;
     } else {
       upsertEtapa_(etapa, numero, materialTxt, factUrl, estado, comentario, usuario, ahora);
     }
 
+    // Estado del paso (incluye etapas paralelas)
+    const paso = paso_(pasoActual);
+    const pendientes = paso.etapas.filter(function (e) {
+      return e.id !== etapa.id && estadoEtapa_(e, numero, r) !== 'Aprobado';
+    });
+
     let estadoGlobal;
-    let nuevaEtapa = etapaId;
-    if (estado === 'Aprobado') {
-      siguiente = ETAPAS[idx + 1] || null;
+    let nuevoPaso = pasoActual;
+    if (estado === 'Aprobado' && !pendientes.length) {
+      siguiente = siguientePaso_(pasoActual, flags);
       if (siguiente) {
-        nuevaEtapa = siguiente.id;
-        upsertEtapa_(siguiente, numero, materialTxt, factUrl, 'Pendiente', '', siguiente.emails.join(', '), ahora);
+        nuevoPaso = siguiente.id;
+        siguiente.etapas.forEach(function (e) {
+          upsertEtapa_(e, numero, materialTxt, factUrl, 'Pendiente', '', e.emails.join(', '), ahora);
+        });
         estadoGlobal = 'En ' + siguiente.nombre;
       } else {
-        nuevaEtapa = ETAPA_FINALIZADA;
+        finalizada = true;
+        nuevoPaso = ETAPA_FINALIZADA;
         estadoGlobal = 'Finalizada';
       }
     } else if (estado === 'Rechazado') {
       estadoGlobal = 'Rechazada en ' + etapa.nombre;
+    } else if (estado === 'Aprobado') {
+      estadoGlobal = 'En ' + paso.nombre + ' · falta ' + pendientes.map(function (e) { return e.nombre; }).join(', ');
     } else {
-      estadoGlobal = 'En ' + etapa.nombre + (estado === 'En revisión' ? ' · En revisión' : '');
+      estadoGlobal = 'En ' + paso.nombre + (estado === 'En revisión' ? ' · ' + etapa.nombre + ' en revisión' : '');
     }
 
     sh.getRange(fila, COL_SOL.ESTADO).setValue(estadoGlobal);
-    sh.getRange(fila, COL_SOL.ETAPA).setValue(nuevaEtapa);
+    sh.getRange(fila, COL_SOL.ETAPA).setValue(nuevoPaso);
     sh.getRange(fila, COL_SOL.ACTUALIZADO).setValue(ahora);
     registrarHistorial_(numero, etapa.nombre, estado, comentario, usuario, ahora);
     SpreadsheetApp.flush();
@@ -269,22 +367,32 @@ function actualizarEtapa(numero, etapaId, estado, comentario) {
   }
 
   // Notificaciones (fuera del lock)
-  if (estado === 'Aprobado' && siguiente) {
-    notificar_(siguiente.emails, '[' + numero + '] Solicitud pendiente en ' + siguiente.nombre, datosCorreo,
-      'Tienes una solicitud de material pendiente de revisión en la etapa <b>' + siguiente.nombre + '</b>.');
-  } else if (estado === 'Aprobado' || estado === 'Rechazado') {
+  if (siguiente) {
+    const correos = [].concat.apply([], siguiente.etapas.map(function (e) { return e.emails; }));
+    notificar_(correos, '[' + numero + '] Solicitud pendiente en ' + siguiente.nombre, datosCorreo,
+      'Tienes una solicitud de material pendiente de revisión en <b>' + siguiente.nombre + '</b>.');
+  } else if (finalizada || estado === 'Rechazado') {
     const destinatarios = etapa_('PMO').emails.concat(datosCorreo.correoSolicitante ? [datosCorreo.correoSolicitante] : []);
     notificar_(destinatarios, '[' + numero + '] ' + datosCorreo.estadoGlobal, datosCorreo,
-      estado === 'Aprobado' ? 'La solicitud completó todo el flujo y quedó <b>Finalizada</b>.'
-                            : 'La solicitud fue <b>rechazada</b> en la etapa ' + etapa.nombre + '.');
+      finalizada ? 'La solicitud completó todo el flujo y quedó <b>Finalizada</b>.'
+                 : 'La solicitud fue <b>rechazada</b> en la etapa ' + etapa.nombre + '.');
   }
 
   return listarSolicitudes_();
 }
 
+/** Estado actual de una etapa para una solicitud (fila `r` de Solicitudes PMO). */
+function estadoEtapa_(etapa, numero, r) {
+  if (etapa.id === 'PMO') return String(r[COL_SOL.ESTADO_PMO - 1] || 'Pendiente');
+  const sh = hoja_(etapa.hoja, ENC_ETAPA);
+  const fila = buscarFila_(sh, numero);
+  return fila ? String(sh.getRange(fila, COL_ETAPA.ESTADO).getValue() || 'Pendiente') : 'Pendiente';
+}
+
 /* ============================================================================
  *  Catálogo y validación de material (hoja Reglas)
  * ========================================================================== */
+
 
 function getCatalogo_() {
   const cache = CacheService.getScriptCache();
@@ -402,6 +510,8 @@ function crearArchivoFactibilidad_(carpeta, info) {
     ['Material (descripción)', info.material.d],
     ['Tipo de material', info.material.t],
     ['Subfamilia', info.material.s + (info.material.sn ? ' — ' + info.material.sn : '')],
+    ['¿Es de exportación?', info.exportacion],
+    ['¿Requiere producción?', info.produccion],
     ['', ''],
     ['Pregunta', 'Respuesta']
   ].concat(info.respuestas.map(function (r) { return [r.pregunta, seguro_(r.respuesta)]; }));
@@ -410,10 +520,11 @@ function crearArchivoFactibilidad_(carpeta, info) {
   sh.getRange('A1:B1').merge().setFontSize(16).setFontWeight('bold').setFontColor('#ffffff')
     .setBackground('#0f5c4a').setVerticalAlignment('middle');
   sh.setRowHeight(1, 40);
-  sh.getRange(3, 1, 8, 1).setFontWeight('bold').setFontColor('#334155');
-  sh.getRange(3, 1, 8, 2).setBackground('#f1f5f4');
-  sh.getRange(12, 1, 1, 2).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f7a63');
-  sh.getRange(12, 1, filas.length - 11, 2).setBorder(true, true, true, true, true, true, '#cbd5e1',
+  const filaPreguntas = 14;   // fila del encabezado "Pregunta / Respuesta"
+  sh.getRange(3, 1, filaPreguntas - 4, 1).setFontWeight('bold').setFontColor('#334155');
+  sh.getRange(3, 1, filaPreguntas - 4, 2).setBackground('#f1f5f4');
+  sh.getRange(filaPreguntas, 1, 1, 2).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f7a63');
+  sh.getRange(filaPreguntas, 1, filas.length - filaPreguntas + 1, 2).setBorder(true, true, true, true, true, true, '#cbd5e1',
     SpreadsheetApp.BorderStyle.SOLID);
   sh.getRange(1, 1, filas.length, 2).setWrap(true).setVerticalAlignment('middle');
   sh.setColumnWidth(1, 320);
@@ -439,12 +550,14 @@ function listarSolicitudes_() {
   const porEtapa = {};
   ETAPAS.forEach(function (e) { if (e.hoja) porEtapa[e.id] = leerEtapa_(e); });
   const historial = leerHistorial_();
+  const pmo = etapa_('PMO');
 
   return valores
     .filter(function (r) { return String(r[0]).trim() !== ''; })
     .map(function (r) {
       const numero = String(r[COL_SOL.NUMERO - 1]);
-      const pmo = etapa_('PMO');
+      const flags = flagsFila_(r);
+      const pasoActual = pasoActualFila_(r);
       return {
         numero: numero,
         material: String(r[COL_SOL.MATERIAL - 1]),
@@ -457,21 +570,29 @@ function listarSolicitudes_() {
         griffing: String(r[COL_SOL.GRIFFING - 1]),
         carpetaUrl: String(r[COL_SOL.CARPETA - 1]),
         estado: String(r[COL_SOL.ESTADO - 1]),
-        etapaActual: String(r[COL_SOL.ETAPA - 1]),
+        etapaActual: pasoActual,
+        exportacion: flags.exportacion,
+        produccion: flags.produccion,
         fecha: fecha_(r[COL_SOL.FECHA - 1]),
         actualizado: fecha_(r[COL_SOL.ACTUALIZADO - 1]),
         etapas: ETAPAS.map(function (e) {
+          const aplica = aplica_(e, flags);
+          let x;
           if (e.id === 'PMO') {
-            return {
-              id: 'PMO',
+            x = {
               estado: String(r[COL_SOL.ESTADO_PMO - 1] || 'Pendiente'),
               comentario: String(r[COL_SOL.COMENTARIO_PMO - 1] || ''),
               responsable: pmo.emails.join(', ')
             };
+          } else {
+            x = porEtapa[e.id][numero] || { estado: '', comentario: '', responsable: '', actualizado: '' };
           }
-          const x = porEtapa[e.id][numero];
-          return x ? { id: e.id, estado: x.estado, comentario: x.comentario, responsable: x.responsable, actualizado: x.actualizado }
-                   : { id: e.id, estado: '', comentario: '', responsable: '' };
+          // Etapa del paso en curso sin fila aún (p. ej. solicitudes antiguas): Pendiente
+          if (!x.estado && aplica && e.paso === pasoActual) x.estado = 'Pendiente';
+          return {
+            id: e.id, estado: x.estado, comentario: x.comentario, responsable: x.responsable,
+            actualizado: x.actualizado || '', aplica: aplica
+          };
         }),
         historial: historial[numero] || []
       };
@@ -630,8 +751,8 @@ function asegurarEncabezados_(sh, encabezados) {
 function usuarioActual_() {
   const email = String(Session.getActiveUser().getEmail() || '').toLowerCase().trim();
   if (!email) {
-    throw new Error('No se pudo identificar tu correo. Ingresa con tu cuenta @masisa.com ' +
-      '(la aplicación debe estar publicada para usuarios del dominio).');
+    throw new Error('No se pudo identificar tu correo. Ingresa con tu cuenta de Google ' +
+      '(la aplicación debe publicarse como "Usuario que accede a la aplicación web").');
   }
   return email;
 }
@@ -671,6 +792,8 @@ function fecha_(v) {
   if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, CONFIG.ZONA_HORARIA, 'dd-MM-yyyy HH:mm');
   return v ? String(v) : '';
 }
+
+function esSi_(v) { return /^s[ií]$/i.test(String(v || '').trim()); }
 
 function esc_(v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
