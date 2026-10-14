@@ -1,0 +1,534 @@
+<script>
+  const APP = {
+    data: null,
+    vista: 'SOLICITUD',
+    filtro: 'etapa',     // 'etapa' | 'todas'
+    busqueda: '',
+    foco: null           // número de solicitud a resaltar
+  };
+
+  /* ===================== Arranque ===================== */
+
+  document.addEventListener('DOMContentLoaded', cargar);
+
+  function cargar() {
+    google.script.run
+      .withSuccessHandler(function (data) {
+        APP.data = data;
+        if (data.roles.length && data.roles.indexOf('PMO') < 0) APP.vista = data.roles[0];
+        renderUser();
+        render();
+      })
+      .withFailureHandler(function (err) {
+        document.getElementById('main').innerHTML =
+          '<div class="notice bad">' + esc(err.message || err) + '</div>';
+      })
+      .getInicio();
+  }
+
+  function refrescar() {
+    google.script.run
+      .withSuccessHandler(function (lista) { APP.data.solicitudes = lista; render(); toast('Datos actualizados'); })
+      .withFailureHandler(errorToast)
+      .getSolicitudes();
+  }
+
+  /* ===================== Helpers ===================== */
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function norm(v) { return String(v || '').replace(/\s+/g, ' ').trim().toUpperCase(); }
+  function unicos(arr) { return arr.filter(function (x, i) { return arr.indexOf(x) === i; }); }
+  function etapa(id) { return APP.data.etapas.filter(function (e) { return e.id === id; })[0]; }
+  function esMio(id) { return APP.data.roles.indexOf(id) >= 0; }
+  function nombreDesdeCorreo(email) {
+    return String(email || '').split('@')[0].split(/[._-]+/).filter(Boolean)
+      .map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' ');
+  }
+
+  function clasePill(estado) {
+    const e = String(estado || '').toLowerCase();
+    if (e.indexOf('rechaz') >= 0) return 'bad';
+    if (e.indexOf('aprob') >= 0 || e.indexOf('finaliz') >= 0) return 'ok';
+    if (e.indexOf('revisi') >= 0) return 'info';
+    if (e) return 'warn';
+    return '';
+  }
+
+  function toast(msg, tipo) {
+    const t = document.createElement('div');
+    t.className = 'toast ' + (tipo || '');
+    t.textContent = msg;
+    document.getElementById('toasts').appendChild(t);
+    setTimeout(function () { t.remove(); }, tipo === 'bad' ? 7000 : 3500);
+  }
+  function errorToast(err) { toast(err && err.message ? err.message : String(err), 'bad'); }
+
+  function cargando(btn, on, texto) {
+    if (on) {
+      btn.dataset.txt = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>' + esc(texto || 'Guardando…');
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = btn.dataset.txt || btn.innerHTML;
+    }
+  }
+
+  /* ===================== Cabecera ===================== */
+
+  function renderUser() {
+    const d = APP.data;
+    const roles = d.roles.map(function (r) { return '<span class="role">' + esc(etapa(r).nombre) + '</span>'; }).join('');
+    document.getElementById('user').innerHTML =
+      '<span class="email">' + esc(d.usuario) + '</span>' + (roles || '<span class="role">Consulta</span>');
+  }
+
+  /* ===================== Línea de tiempo superior ===================== */
+
+  function renderFlow() {
+    const sols = APP.data.solicitudes;
+    const pasos = [{ id: 'SOLICITUD', nombre: 'Solicitud', meta: sols.length + ' en total', icon: '+' }]
+      .concat(APP.data.etapas.map(function (e, i) {
+        const n = sols.filter(function (s) { return s.etapaActual === e.id; }).length;
+        return { id: e.id, nombre: e.nombre, meta: n ? n + ' en curso' : 'Sin pendientes', icon: String(i + 1), n: n };
+      }));
+
+    document.getElementById('flow').innerHTML = pasos.map(function (p) {
+      const cls = ['flow-step'];
+      if (p.id === APP.vista) cls.push('active');
+      if (p.n) cls.push('has-work');
+      const mio = p.id === 'SOLICITUD' ? esMio('PMO') : esMio(p.id);
+      return '<button class="' + cls.join(' ') + '" data-vista="' + p.id + '">' +
+        '<span class="flow-dot">' + esc(p.icon) +
+          (p.n && mio ? '<span class="flow-badge">' + p.n + '</span>' : '') + '</span>' +
+        '<span class="flow-label">' + esc(p.nombre) + '</span>' +
+        '<span class="flow-meta">' + esc(p.meta) + '</span>' +
+        (mio ? '<span class="flow-mine">Tu etapa</span>' : '') +
+        '</button>';
+    }).join('');
+  }
+
+  document.getElementById('flow').addEventListener('click', function (ev) {
+    const b = ev.target.closest('[data-vista]');
+    if (!b) return;
+    APP.vista = b.dataset.vista;
+    APP.filtro = 'etapa';
+    APP.busqueda = '';
+    APP.foco = null;
+    render();
+  });
+
+  /* ===================== Render principal ===================== */
+
+  function render() {
+    renderFlow();
+    const main = document.getElementById('main');
+    main.innerHTML = APP.vista === 'SOLICITUD' ? vistaSolicitud() : vistaEtapa(APP.vista);
+    if (APP.vista === 'SOLICITUD') initFormulario();
+    if (APP.foco) {
+      const el = document.getElementById('req-' + APP.foco);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const det = el.querySelector('details');
+        if (det) det.open = true;
+      }
+      APP.foco = null;
+    }
+  }
+
+  /* ---------- Vista: Solicitud ---------- */
+
+  function vistaSolicitud() {
+    const d = APP.data;
+    const puedeCrear = esMio('PMO');
+    const recientes = d.solicitudes.slice(0, 12);
+
+    const form = puedeCrear ? formularioHtml() :
+      '<div class="card-body"><div class="notice">Sólo el PMO (' + esc(etapa('PMO').emails.join(', ')) +
+      ') puede ingresar nuevas solicitudes. Puedes revisar el avance en la línea de tiempo.</div></div>';
+
+    const lista = recientes.length ? '<div class="mini">' + recientes.map(function (s) {
+      return '<div class="mini-row" data-ir="' + esc(s.numero) + '">' +
+        '<div><div class="mini-title">' + esc(s.numero) + ' · ' + esc(s.proyecto) + '</div>' +
+        '<div class="mini-sub">' + esc(s.material) + ' · ' + esc(s.tipo) + ' · ' + esc(s.subfamilia) + ' — ' + esc(s.fecha) + '</div></div>' +
+        '<span class="pill ' + clasePill(s.estado) + '">' + esc(s.estado) + '</span></div>';
+    }).join('') + '</div>' :
+      '<div class="empty"><div class="big">📄</div>Aún no hay solicitudes.</div>';
+
+    return '<div class="grid">' +
+      '<section class="card"><div class="card-head"><h2>Nueva solicitud de material</h2>' +
+      '<p>El material, tipo y subfamilia deben coincidir con la hoja Reglas.</p></div>' + form + '</section>' +
+      '<section class="card"><div class="card-head"><h2>Últimas solicitudes</h2>' +
+      '<p>Haz clic en una para ver su avance.</p></div><div class="card-body">' + lista + '</div></section>' +
+      '</div>';
+  }
+
+  function formularioHtml() {
+    const d = APP.data;
+    const preguntas = d.preguntas.map(function (p) {
+      const req = p.requerida ? ' <span class="req">*</span>' : '';
+      const full = p.tipo === 'textarea' ? ' full' : '';
+      let control;
+      if (p.tipo === 'select') {
+        control = '<select class="select" name="f_' + p.id + '"><option value="">Selecciona…</option>' +
+          p.opciones.map(function (o) { return '<option>' + esc(o) + '</option>'; }).join('') + '</select>';
+      } else if (p.tipo === 'textarea') {
+        control = '<textarea class="textarea" name="f_' + p.id + '"></textarea>';
+      } else {
+        control = '<input class="input" type="' + (p.tipo === 'number' ? 'number' : p.tipo) +
+          '" step="any" name="f_' + p.id + '">';
+      }
+      return '<div class="field' + full + '"><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
+    }).join('');
+
+    const descripciones = unicos(d.catalogo.map(function (x) { return x.d; })).sort();
+
+    return '<form class="card-body" id="form-sol" autocomplete="off" novalidate>' +
+      '<div class="section-title">Datos generales</div>' +
+      '<div class="fields">' +
+        '<div class="field"><label>Nombre del proyecto <span class="req">*</span></label>' +
+          '<input class="input" name="proyecto" placeholder="Ej. Línea Melamina Norte"></div>' +
+        '<div class="field"><label>Solicitante <span class="req">*</span></label>' +
+          '<input class="input" name="solicitante" value="' + esc(nombreDesdeCorreo(d.usuario)) + '"></div>' +
+      '</div>' +
+
+      '<div class="section-title">Material</div>' +
+      '<div class="fields">' +
+        '<div class="field full"><label>Material (descripción) <span class="req">*</span></label>' +
+          '<input class="input" name="material" list="dl-mat" placeholder="Escribe para buscar… ej. MDF STD">' +
+          '<datalist id="dl-mat">' + descripciones.map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>' +
+          '<span class="hint" id="hint-mat">' + descripciones.length + ' materiales disponibles en Reglas.</span></div>' +
+        '<div class="field"><label>Tipo de material <span class="req">*</span></label>' +
+          '<select class="select" name="tipo" disabled><option value="">Primero elige el material</option></select></div>' +
+        '<div class="field"><label>Subfamilia <span class="req">*</span></label>' +
+          '<select class="select" name="subfamilia" disabled><option value="">Primero elige el tipo</option></select></div>' +
+        '<div class="match" id="match">✓ <span></span></div>' +
+      '</div>' +
+
+      '<div class="section-title">Factibilidad</div>' +
+      '<div class="fields">' + preguntas + '</div>' +
+
+      '<div class="actions">' +
+        '<button type="reset" class="btn btn-ghost">Limpiar</button>' +
+        '<button type="submit" class="btn btn-primary">Ingresar solicitud</button>' +
+      '</div>' +
+      '</form>';
+  }
+
+  function initFormulario() {
+    const form = document.getElementById('form-sol');
+    if (!form) return;
+    const cat = APP.data.catalogo;
+    const inMat = form.elements.material, selTipo = form.elements.tipo, selSub = form.elements.subfamilia;
+    const hint = document.getElementById('hint-mat'), match = document.getElementById('match');
+
+    function filasMaterial() {
+      const v = norm(inMat.value);
+      return cat.filter(function (x) { return norm(x.d) === v; });
+    }
+
+    function onMaterial() {
+      const filas = filasMaterial();
+      selSub.innerHTML = '<option value="">Primero elige el tipo</option>';
+      selSub.disabled = true;
+      if (!inMat.value.trim()) {
+        hint.className = 'hint'; hint.textContent = 'Escribe para buscar en la hoja Reglas.';
+        inMat.classList.remove('invalid');
+      } else if (!filas.length) {
+        hint.className = 'hint bad'; hint.textContent = 'Este material no existe en la hoja Reglas.';
+        inMat.classList.add('invalid');
+      } else {
+        inMat.value = filas[0].d;
+        hint.className = 'hint ok'; hint.textContent = 'Material encontrado en Reglas.';
+        inMat.classList.remove('invalid');
+      }
+      const tipos = unicos(filas.map(function (x) { return x.t; }));
+      selTipo.innerHTML = '<option value="">' + (tipos.length ? 'Selecciona el tipo…' : 'Primero elige el material') + '</option>' +
+        tipos.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('');
+      selTipo.disabled = !tipos.length;
+      if (tipos.length === 1) selTipo.value = tipos[0];
+      onTipo();
+    }
+
+    function onTipo() {
+      const filas = filasMaterial().filter(function (x) { return x.t === selTipo.value; });
+      selSub.innerHTML = '<option value="">' + (filas.length ? 'Selecciona la subfamilia…' : 'Primero elige el tipo') + '</option>' +
+        filas.map(function (x) {
+          return '<option value="' + esc(x.s) + '">' + esc(x.s + (x.sn ? ' — ' + x.sn : '')) + '</option>';
+        }).join('');
+      selSub.disabled = !filas.length;
+      if (filas.length === 1) selSub.value = filas[0].s;
+      onSub();
+    }
+
+    function onSub() {
+      const fila = filasMaterial().filter(function (x) { return x.t === selTipo.value && x.s === selSub.value; })[0];
+      match.classList.toggle('show', !!fila);
+      if (fila) match.querySelector('span').textContent =
+        'Combinación válida: ' + fila.d + ' · ' + fila.t + ' · ' + fila.s + (fila.sn ? ' (' + fila.sn + ')' : '');
+    }
+
+    inMat.addEventListener('change', onMaterial);
+    inMat.addEventListener('input', function () { if (filasMaterial().length || !inMat.value) onMaterial(); });
+    selTipo.addEventListener('change', onTipo);
+    selSub.addEventListener('change', onSub);
+    form.addEventListener('reset', function () { setTimeout(onMaterial, 0); });
+    form.addEventListener('submit', enviarSolicitud);
+  }
+
+  function enviarSolicitud(ev) {
+    ev.preventDefault();
+    const form = ev.target;
+    const btn = form.querySelector('[type=submit]');
+    const el = form.elements;
+    const datos = {
+      proyecto: el.proyecto.value,
+      solicitante: el.solicitante.value,
+      material: el.material.value,
+      tipo: el.tipo.value,
+      subfamilia: el.subfamilia.value,
+      factibilidad: {}
+    };
+
+    // Validación en el cliente (el servidor vuelve a validar todo)
+    let faltan = [];
+    form.querySelectorAll('.invalid').forEach(function (x) { x.classList.remove('invalid'); });
+    function marcar(control, etiqueta) { control.classList.add('invalid'); faltan.push(etiqueta); }
+    if (!datos.proyecto.trim()) marcar(el.proyecto, 'Proyecto');
+    if (!datos.solicitante.trim()) marcar(el.solicitante, 'Solicitante');
+    const valido = APP.data.catalogo.some(function (x) {
+      return norm(x.d) === norm(datos.material) && x.t === datos.tipo && x.s === datos.subfamilia;
+    });
+    if (!valido) {
+      marcar(el.material, 'Material / tipo / subfamilia válidos');
+      if (!datos.tipo) el.tipo.classList.add('invalid');
+      if (!datos.subfamilia) el.subfamilia.classList.add('invalid');
+    }
+    APP.data.preguntas.forEach(function (p) {
+      const c = el['f_' + p.id];
+      datos.factibilidad[p.id] = c.value;
+      if (p.requerida && !String(c.value).trim()) marcar(c, p.texto);
+    });
+    if (faltan.length) {
+      toast('Revisa los campos: ' + faltan.join(', '), 'bad');
+      const primero = form.querySelector('.invalid');
+      if (primero) primero.focus();
+      return;
+    }
+
+    cargando(btn, true, 'Creando solicitud…');
+    google.script.run
+      .withSuccessHandler(function (res) {
+        cargando(btn, false);
+        APP.data.solicitudes = res.solicitudes;
+        form.reset();
+        render();
+        modalExito(res);
+      })
+      .withFailureHandler(function (err) { cargando(btn, false); errorToast(err); })
+      .crearSolicitud(datos);
+  }
+
+  function modalExito(res) {
+    const m = document.getElementById('modal');
+    m.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' +
+      '<div class="check">✓</div><h3>Solicitud ingresada</h3>' +
+      '<div class="num">' + esc(res.numero) + '</div>' +
+      '<p>Se creó el archivo de factibilidad y quedó pendiente de revisión del PMO.</p>' +
+      '<div class="row">' +
+        '<a class="btn btn-ghost" target="_blank" href="' + esc(res.carpetaUrl) + '">Abrir carpeta</a>' +
+        '<a class="btn btn-ghost" target="_blank" href="' + esc(res.factibilidadUrl) + '">Ver factibilidad</a>' +
+        '<button class="btn btn-primary" data-cerrar>Ir a PMO</button>' +
+      '</div></div>';
+    m.hidden = false;
+    m.onclick = function (ev) {
+      if (ev.target === m) { m.hidden = true; return; }
+      if (ev.target.closest('[data-cerrar]')) {
+        m.hidden = true;
+        APP.vista = 'PMO'; APP.filtro = 'etapa'; APP.foco = res.numero;
+        render();
+      }
+    };
+  }
+
+  /* ---------- Vista: Etapa ---------- */
+
+  function vistaEtapa(id) {
+    const e = etapa(id);
+    const todas = APP.data.solicitudes;
+    const enEtapa = todas.filter(function (s) { return s.etapaActual === id; });
+    let lista = APP.filtro === 'etapa' ? enEtapa : todas;
+    const q = norm(APP.busqueda);
+    if (q) {
+      lista = lista.filter(function (s) {
+        return norm([s.numero, s.proyecto, s.material, s.tipo, s.subfamilia, s.solicitante, s.estado].join(' ')).indexOf(q) >= 0;
+      });
+    }
+
+    const head = '<div class="view-head"><div>' +
+      '<h1>' + esc(e.nombre) + '</h1>' +
+      '<p>Responsable: ' + esc(e.emails.join(', ')) +
+        (esMio(id) ? ' · <b style="color:var(--primary-2)">Puedes cambiar el estado y comentar</b>' : ' · Sólo lectura') + '</p>' +
+      '</div><div class="toolbar">' +
+        '<div class="chips">' +
+          '<button class="chip ' + (APP.filtro === 'etapa' ? 'on' : '') + '" data-filtro="etapa">En esta etapa (' + enEtapa.length + ')</button>' +
+          '<button class="chip ' + (APP.filtro === 'todas' ? 'on' : '') + '" data-filtro="todas">Todas (' + todas.length + ')</button>' +
+        '</div>' +
+        '<input class="input search" id="buscar" placeholder="Buscar nº, proyecto, material…" value="' + esc(APP.busqueda) + '">' +
+        '<button class="btn btn-ghost btn-sm" data-refrescar>↻ Actualizar</button>' +
+      '</div></div>';
+
+    const cuerpo = lista.length ? '<div class="list">' + lista.map(function (s) { return tarjeta(s, id); }).join('') + '</div>' :
+      '<div class="card empty"><div class="big">✓</div>' +
+        (APP.filtro === 'etapa' ? 'No hay solicitudes pendientes en ' + esc(e.nombre) + '.' : 'No hay resultados.') + '</div>';
+
+    return head + cuerpo;
+  }
+
+  function nodos(s) {
+    const n = [{ nombre: 'Solicitud', cls: 'done', estado: 'Creada', icon: '✓' }];
+    APP.data.etapas.forEach(function (e, i) {
+      const st = s.etapas[i] || {};
+      let cls = '', icon = String(i + 1), estado = '—';
+      if (st.estado === 'Aprobado') { cls = 'done'; icon = '✓'; estado = 'Aprobado'; }
+      else if (st.estado === 'Rechazado') { cls = 'rejected'; icon = '✕'; estado = 'Rechazado'; }
+      else if (s.etapaActual === e.id) { cls = 'current'; estado = st.estado || 'Pendiente'; }
+      n.push({ nombre: e.nombre, cls: cls, estado: estado, icon: icon });
+    });
+    return n;
+  }
+
+  function tarjeta(s, vista) {
+    const tl = '<div class="tl">' + nodos(s).map(function (x) {
+      return '<div class="tl-step ' + x.cls + '"><div class="tl-dot">' + esc(x.icon) + '</div>' +
+        '<div class="tl-name">' + esc(x.nombre) + '</div><div class="tl-state">' + esc(x.estado) + '</div></div>';
+    }).join('') + '</div>';
+
+    const links = '<div class="req-links">' +
+      (s.factibilidadUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.factibilidadUrl) + '">📄 Factibilidad</a>' : '') +
+      (s.carpetaUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.carpetaUrl) + '">📁 Carpeta</a>' : '') +
+      (s.griffing ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.griffing) + '">Griffing</a>' : '') +
+      '</div>';
+
+    const puedeActuar = s.etapaActual === vista && esMio(vista);
+    let accion = '';
+    if (puedeActuar) {
+      const idx = APP.data.etapas.findIndex(function (e) { return e.id === vista; });
+      const st = s.etapas[idx] || {};
+      const sig = APP.data.etapas[idx + 1];
+      accion = '<form class="act" data-num="' + esc(s.numero) + '" data-etapa="' + esc(vista) + '">' +
+        '<div class="act-title">✎ Actualizar etapa ' + esc(etapa(vista).nombre) + '</div>' +
+        '<div class="fields">' +
+          '<div class="field"><label>Estado</label><select class="select" name="estado">' +
+            APP.data.estados.map(function (e) {
+              return '<option' + ((st.estado || 'Pendiente') === e ? ' selected' : '') + '>' + esc(e) + '</option>';
+            }).join('') + '</select>' +
+            '<span class="hint">' + (sig ? 'Al aprobar pasa a ' + esc(sig.nombre) + '.' : 'Al aprobar la solicitud se finaliza.') + '</span></div>' +
+          '<div class="field"><label>Comentario</label><textarea class="textarea" name="comentario" placeholder="Obligatorio si rechazas">' +
+            esc(st.comentario || '') + '</textarea></div>' +
+        '</div>' +
+        '<div class="actions"><button type="submit" class="btn btn-primary">Guardar estado</button></div>' +
+        '</form>';
+    }
+
+    const notas = APP.data.etapas.map(function (e, i) {
+      const st = s.etapas[i] || {};
+      if (!st.estado) return '';
+      return '<div class="note"><h4>' + esc(e.nombre) + '</h4>' +
+        '<span class="pill ' + clasePill(st.estado) + '">' + esc(st.estado) + '</span>' +
+        (st.comentario ? '<p>' + esc(st.comentario) + '</p>' : '') +
+        (st.responsable ? '<p class="hint">' + esc(st.responsable) + (st.actualizado ? ' · ' + esc(st.actualizado) : '') + '</p>' : '') +
+        '</div>';
+    }).join('');
+
+    const historial = s.historial.length ? '<ul class="history">' + s.historial.slice().reverse().map(function (h) {
+      return '<li><div class="h-top"><b>' + esc(h.etapa) + '</b> · ' + esc(h.estado) + '</div>' +
+        '<div class="h-sub">' + esc(h.usuario) + ' · ' + esc(h.fecha) + '</div>' +
+        (h.comentario ? '<div class="h-com">' + esc(h.comentario) + '</div>' : '') + '</li>';
+    }).join('') + '</ul>' : '<p class="hint">Sin movimientos.</p>';
+
+    return '<article class="card req" id="req-' + esc(s.numero) + '">' +
+      '<div class="req-top"><div>' +
+        '<div class="req-num">' + esc(s.numero) + '</div>' +
+        '<div class="req-title">' + esc(s.proyecto) + '</div>' +
+        '<div class="req-meta">' +
+          '<span>Material: <b>' + esc(s.material) + '</b></span>' +
+          '<span>Tipo: <b>' + esc(s.tipo) + '</b></span>' +
+          '<span>Subfamilia: <b>' + esc(s.subfamilia) + '</b></span>' +
+          '<span>Solicitante: <b>' + esc(s.solicitante) + '</b></span>' +
+          '<span>' + esc(s.fecha) + '</span>' +
+        '</div></div>' +
+        '<span class="pill ' + clasePill(s.estado) + '">' + esc(s.estado) + '</span>' +
+      '</div>' +
+      tl + accion + links +
+      '<details class="more"><summary>Detalle y comentarios</summary>' +
+        (notas ? '<div class="stage-notes">' + notas + '</div>' : '') + historial +
+      '</details>' +
+      '</article>';
+  }
+
+  /* ===================== Eventos del contenido ===================== */
+
+  const main = document.getElementById('main');
+
+  main.addEventListener('click', function (ev) {
+    const f = ev.target.closest('[data-filtro]');
+    if (f) { APP.filtro = f.dataset.filtro; render(); return; }
+    if (ev.target.closest('[data-refrescar]')) { refrescar(); return; }
+    const ir = ev.target.closest('[data-ir]');
+    if (ir) {
+      const s = APP.data.solicitudes.filter(function (x) { return x.numero === ir.dataset.ir; })[0];
+      if (!s) return;
+      const enCurso = APP.data.etapas.some(function (e) { return e.id === s.etapaActual; });
+      APP.vista = enCurso ? s.etapaActual : APP.data.etapas[APP.data.etapas.length - 1].id;
+      APP.filtro = enCurso ? 'etapa' : 'todas';
+      APP.busqueda = '';
+      APP.foco = s.numero;
+      render();
+    }
+  });
+
+  let tBusqueda;
+  main.addEventListener('input', function (ev) {
+    if (ev.target.id !== 'buscar') return;
+    clearTimeout(tBusqueda);
+    tBusqueda = setTimeout(function () {
+      APP.busqueda = ev.target.value;
+      const pos = ev.target.selectionStart;
+      render();
+      const b = document.getElementById('buscar');
+      b.focus();
+      b.setSelectionRange(pos, pos);
+    }, 250);
+  });
+
+  main.addEventListener('submit', function (ev) {
+    const form = ev.target.closest('form.act');
+    if (!form) return;
+    ev.preventDefault();
+    const estado = form.elements.estado.value;
+    const comentario = form.elements.comentario.value;
+    if (estado === 'Rechazado' && !comentario.trim()) {
+      form.elements.comentario.classList.add('invalid');
+      form.elements.comentario.focus();
+      toast('Debes dejar un comentario al rechazar.', 'bad');
+      return;
+    }
+    const btn = form.querySelector('[type=submit]');
+    const num = form.dataset.num;
+    cargando(btn, true);
+    google.script.run
+      .withSuccessHandler(function (lista) {
+        APP.data.solicitudes = lista;
+        APP.foco = num;
+        render();
+        toast(num + ': estado actualizado a "' + estado + '"', 'ok');
+      })
+      .withFailureHandler(function (err) { cargando(btn, false); errorToast(err); })
+      .actualizarEtapa(num, form.dataset.etapa, estado, comentario);
+  });
+</script>

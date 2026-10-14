@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">T</div>
+      <div>
+        <div class="brand-title">Solicitudes de Materiales</div>
+        <div class="brand-sub">Tableros · Flujo PMO → Operaciones</div>
+      </div>
+    </div>
+    <div class="user" id="user"></div>
+  </header>
+
+  <!-- Línea de tiempo principal (navegación) -->
+  <nav class="flow" id="flow" aria-label="Etapas del flujo"></nav>
+
+  <main class="main" id="main">
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Cargando información…</p>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+  <div class="modal-back" id="modal" hidden></div>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
