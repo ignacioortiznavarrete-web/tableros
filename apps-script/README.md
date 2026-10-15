@@ -61,10 +61,14 @@ Todo se registra en la planilla *Tableros*.
   no apruebe, y **no puede aprobar T&D sin haberla respondido**. Las preguntas dependientes (pigmento,
   aditivo, coproducto, cuáles embalajes) sólo aparecen si la pregunta madre es *SI*; si no, quedan *N/A*.
 - **Archivo de factibilidad**: un Google Sheet `Factibilidad SOL-XXXX - <Proyecto>` en
-  `Carpeta Factibilidad / <Solicitante> / <Proyecto>` con **las dos partes**: la solicitud del PMO y la
-  respuesta de T&D (o "Pendiente de respuesta de T&D"). Se reescribe cada vez que el PMO edita o T&D responde.
-  En la planilla, la hoja `Factibilidad` guarda una fila por solicitud con las respuestas de ambos
-  (una columna por pregunta, más *Respondida por (T&D)* y *Fecha respuesta (T&D)*).
+  `Carpeta Factibilidad / <Solicitante> / <Proyecto>` con **dos pestañas**: *Solicitud PMO* y
+  *Factibilidad T&D* (esta última dice "Pendiente de respuesta de T&D" hasta que T&D responda).
+  Se reescribe cada vez que el PMO edita o T&D responde.
+- **Hojas de respuestas en la planilla** (una fila por solicitud, una columna por pregunta):
+  `Respuestas PMO` (preguntas del PMO) y `Factibilidad` (respuestas de T&D, con
+  *Respondida por (T&D)* y *Fecha respuesta (T&D)*).
+- **Destino**: en el formulario es un checkbox *Exportación*; sin marcar = Nacional. De ahí se deriva
+  "¿Destino del Producto?" (NACIONAL / INTERNACIONAL) y si se agrega Operaciones Portuarias.
   - *Pendiente*: los campos en amarillo de ambas hojas (Familia, Sustrato, Espesor, Ancho, Largo, Diseño,
     Textura, Acabado, Tipo de producto, Tipo de material, Subfamilia, Emisión, Terminación, 1 o 2 caras)
     se buscarán en catálogos en una etapa posterior.

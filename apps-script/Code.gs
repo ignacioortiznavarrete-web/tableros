@@ -31,7 +31,8 @@ const CONFIG = {
   HOJAS: {
     SOLICITUDES: 'Solicitudes PMO',
     REGLAS: 'Reglas',
-    FACTIBILIDAD: 'Factibilidad',
+    FACTIBILIDAD: 'Factibilidad',        // respuestas de T&D
+    RESPUESTAS_PMO: 'Respuestas PMO',     // respuestas del PMO
     HISTORIAL: 'Historial'
   },
   // Rol Administrador: puede crear, editar y cambiar el estado en TODAS las etapas
@@ -84,8 +85,6 @@ const PREGUNTAS_PMO = [
     opciones: SI_NO, requerida: true },
   { id: 'embalajeCuales',   seccion: S_PMO, texto: '¿Cuáles especificaciones de Embalaje?',           tipo: 'textarea',
     requerida: true, depende: { id: 'embalajePmo', valor: 'SI' } },
-  { id: 'destino',          seccion: S_PMO, texto: '¿Destino del Producto?',                          tipo: 'select',
-    opciones: ['NACIONAL', 'INTERNACIONAL'], requerida: true },
   { id: 'textoComercial',   seccion: S_PMO, texto: 'Texto Comercial',                                 tipo: 'text',     requerida: true },
   { id: 'descProyecto',     seccion: S_PMO, texto: 'Descripción Proyecto',                            tipo: 'textarea', requerida: true },
   { id: 'categoria',        seccion: S_PMO, texto: 'Categoría de Productos',                          tipo: 'text',     requerida: true },
@@ -326,7 +325,7 @@ function crearSolicitud(datos) {
     fila[COL_SOL.PRODUCCION - 1] = produccion;
     sh.appendRow(fila);
 
-    registrarFactibilidad_(numero, respuestas, archivo.getUrl(), ahora);
+    registrarRespuestasPmo_(numero, respuestas, archivo.getUrl(), ahora);
     registrarHistorial_(numero, 'Solicitud', 'Creada',
       'Proyecto: ' + proyecto + ' · Exportación: ' + exportacion + ' · Producción: ' + produccion, usuario, ahora);
     SpreadsheetApp.flush();
@@ -356,7 +355,7 @@ function validarDatos_(datos) {
   if (['Sí', 'No'].indexOf(v.exportacion) < 0) throw new Error('Indica si la solicitud es de exportación.');
   if (['Sí', 'No'].indexOf(v.produccion) < 0) throw new Error('Indica si la solicitud requiere producción.');
   v.mat = validarMaterial_(datos.material, datos.tipo, datos.subfamilia);
-  v.respuestas = validarRespuestas_(PREGUNTAS_PMO, datos.respuestas || {}, 'Solicitud');
+  v.respuestas = conDestino_(validarRespuestas_(PREGUNTAS_PMO, datos.respuestas || {}, 'Solicitud'), v.exportacion);
   return v;
 }
 
@@ -446,7 +445,7 @@ function editarSolicitud(numero, datos) {
     }
     sh.getRange(fila, 1, 1, ENC_SOL.length).setValues([r]);
 
-    registrarFactibilidad_(numero, v.respuestas, archivo.getUrl(), ahora);
+    registrarRespuestasPmo_(numero, v.respuestas, archivo.getUrl(), ahora);
     registrarHistorial_(numero, 'PMO', 'Editada',
       (cambios.length ? cambios.join(' · ') : 'Sin cambios') +
       (destino ? ' · Vuelve a ' + destino.nombre : ''), usuario, ahora);
@@ -509,7 +508,7 @@ function responderFactibilidad(numero, entrada) {
     actualizarArchivoFactibilidad_(url, null, {
       numero: numero, proyecto: r[COL_SOL.PROYECTO - 1], solicitante: r[COL_SOL.SOLICITANTE - 1],
       correo: r[COL_SOL.CORREO - 1], fecha: r[COL_SOL.FECHA - 1], material: mat,
-      respuestas: respuestasArchivo_(respuestasPmoGuardadas_(mapa), mapa),
+      respuestas: respuestasArchivo_(respuestasPmoGuardadas_(mapa, r[COL_SOL.EXPORTACION - 1]), mapa),
       exportacion: r[COL_SOL.EXPORTACION - 1] || 'No', produccion: r[COL_SOL.PRODUCCION - 1] || 'No'
     });
 
@@ -763,66 +762,90 @@ function obtenerOCrearCarpeta_(padre, nombre) {
   return padre.createFolder(nombre);
 }
 
+const TAB_PMO = 'Solicitud PMO';
+const TAB_TYD = 'Factibilidad T&D';
+
 function crearArchivoFactibilidad_(carpeta, info) {
   const libro = SpreadsheetApp.create(nombreFactibilidad_(info));
-  const sh = libro.getSheets()[0];
-  sh.setName('Factibilidad');
-  escribirFactibilidad_(sh, info);
+  libro.getSheets()[0].setName(TAB_PMO);
+  escribirArchivo_(libro, info);
 
   const archivo = DriveApp.getFileById(libro.getId());
   archivo.moveTo(carpeta);
   return archivo;
 }
 
-/** Reescribe el archivo de factibilidad existente (edición del PMO) y lo mueve a `carpeta`. */
+/** Reescribe el archivo de factibilidad existente y, si se indica, lo mueve a `carpeta`. */
 function actualizarArchivoFactibilidad_(url, carpeta, info) {
   const m = String(url || '').match(/\/d\/([-\w]{20,})/);
   if (!m) return carpeta ? crearArchivoFactibilidad_(carpeta, info) : null;
   const libro = SpreadsheetApp.openById(m[1]);
-  const sh = libro.getSheetByName('Factibilidad') || libro.getSheets()[0];
-  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
-  sh.clear();
-  escribirFactibilidad_(sh, info);
+  // Archivos creados con la versión anterior tenían una sola pestaña "Factibilidad"
+  const antigua = libro.getSheetByName('Factibilidad');
+  if (antigua && !libro.getSheetByName(TAB_PMO)) antigua.setName(TAB_PMO);
+  escribirArchivo_(libro, info);
   libro.rename(nombreFactibilidad_(info));
   const archivo = DriveApp.getFileById(m[1]);
   if (carpeta) archivo.moveTo(carpeta);
   return archivo;
 }
 
+/** Escribe las dos pestañas: la solicitud del PMO y la factibilidad de T&D. */
+function escribirArchivo_(libro, info) {
+  [[TAB_PMO, 'Solicitud PMO', info.respuestas.pmo], [TAB_TYD, 'Factibilidad técnica (T&D)', info.respuestas.tyd]]
+    .forEach(function (t) {
+      const sh = libro.getSheetByName(t[0]) || libro.insertSheet(t[0]);
+      sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
+      sh.clear();
+      escribirHoja_(sh, t[1], info, t[2]);
+    });
+}
+
 /**
- * Respuestas para el archivo: las del PMO y, si T&D ya respondió, la factibilidad técnica.
- * `mapa` = fila de la hoja Factibilidad ({ idPregunta: valor, _tydPor, _tydFecha }).
+ * Respuestas para el archivo: { pmo: [...], tyd: [...] }.
+ * `mapa` = respuestas guardadas ({ idPregunta: valor, _tydPor, _tydFecha }).
  */
 function respuestasArchivo_(respuestasPmo, mapa) {
-  const lista = respuestasPmo.slice();
-  const S_TYD = 'Factibilidad T&D';
+  let tyd;
   if (mapa && mapa._tydPor) {
-    lista.push({ pregunta: 'Respondida por', respuesta: mapa._tydPor, seccion: S_TYD });
-    lista.push({ pregunta: 'Fecha respuesta', respuesta: mapa._tydFecha || '', seccion: S_TYD });
-    PREGUNTAS_FACTIBILIDAD.forEach(function (p) {
-      lista.push({ pregunta: p.texto, respuesta: mapa[p.id] || '', seccion: S_TYD + ' · ' + p.seccion });
-    });
+    tyd = [
+      { pregunta: 'Respondida por', respuesta: mapa._tydPor, seccion: 'Respuesta' },
+      { pregunta: 'Fecha respuesta', respuesta: mapa._tydFecha || '', seccion: 'Respuesta' }
+    ].concat(PREGUNTAS_FACTIBILIDAD.map(function (p) {
+      return { pregunta: p.texto, respuesta: mapa[p.id] || '', seccion: p.seccion };
+    }));
   } else {
-    lista.push({ pregunta: 'Estado', respuesta: 'Pendiente de respuesta de T&D', seccion: S_TYD });
+    tyd = [{ pregunta: 'Estado', respuesta: 'Pendiente de respuesta de T&D', seccion: 'Respuesta' }];
   }
-  return lista;
+  return { pmo: respuestasPmo.slice(), tyd: tyd };
 }
 
 /** Respuestas del PMO guardadas, en el formato de validarRespuestas_. */
-function respuestasPmoGuardadas_(mapa) {
+function respuestasPmoGuardadas_(mapa, exportacion) {
   mapa = mapa || {};
-  return PREGUNTAS_PMO.map(function (p) {
+  return conDestino_(PREGUNTAS_PMO.map(function (p) {
     return { id: p.id, pregunta: p.texto, respuesta: mapa[p.id] || '', seccion: p.seccion };
+  }), exportacion);
+}
+
+/** "¿Destino del Producto?" no se pregunta: se deriva del checkbox de exportación. */
+function conDestino_(respuestas, exportacion) {
+  const lista = respuestas.slice();
+  const i = lista.findIndex(function (r) { return r.id === 'embalajeCuales'; });
+  lista.splice(i + 1, 0, {
+    id: 'destino', pregunta: '¿Destino del Producto?', seccion: S_PMO,
+    respuesta: esSi_(exportacion) ? 'INTERNACIONAL (Exportación)' : 'NACIONAL'
   });
+  return lista;
 }
 
 function nombreFactibilidad_(info) {
   return 'Factibilidad ' + info.numero + ' - ' + nombreSeguro_(info.proyecto);
 }
 
-function escribirFactibilidad_(sh, info) {
+function escribirHoja_(sh, titulo, info, respuestas) {
   const filas = [
-    ['Factibilidad de material', ''],
+    [titulo, ''],
     ['', ''],
     ['Número de solicitud', info.numero],
     ['Proyecto', seguro_(info.proyecto)],
@@ -832,13 +855,13 @@ function escribirFactibilidad_(sh, info) {
     ['Material (descripción)', info.material.d],
     ['Tipo de material', info.material.t],
     ['Subfamilia', info.material.s + (info.material.sn ? ' — ' + info.material.sn : '')],
-    ['¿Es de exportación?', info.exportacion],
+    ['Destino', esSi_(info.exportacion) ? 'Exportación' : 'Nacional'],
     ['¿Requiere producción?', info.produccion],
     ['', ''],
     ['Pregunta', 'Respuesta']
   ];
   let seccion = '';
-  info.respuestas.forEach(function (r) {
+  respuestas.forEach(function (r) {
     if (r.seccion && r.seccion !== seccion) {
       seccion = r.seccion;
       filas.push(['▸ ' + seccion.toUpperCase(), '']);
@@ -956,19 +979,32 @@ function leerEtapa_(etapa) {
 
 /** Respuestas por solicitud (PMO y T&D): { 'SOL-0001': { idPregunta: valor, _tydPor, _tydFecha } } */
 function leerFactibilidad_() {
-  const sh = ss_().getSheetByName(CONFIG.HOJAS.FACTIBILIDAD);
+  const tyd = leerRespuestas_(CONFIG.HOJAS.FACTIBILIDAD, PREGUNTAS_FACTIBILIDAD.concat(PREGUNTAS_PMO), true);
+  const pmo = leerRespuestas_(CONFIG.HOJAS.RESPUESTAS_PMO, PREGUNTAS_PMO, false);
+  Object.keys(pmo).forEach(function (num) {
+    const x = tyd[num] = tyd[num] || { _tydPor: '', _tydFecha: '' };
+    Object.keys(pmo[num]).forEach(function (k) { x[k] = pmo[num][k]; });
+  });
+  return tyd;
+}
+
+/** Lee una hoja de respuestas (una fila por solicitud, una columna por pregunta). */
+function leerRespuestas_(nombreHoja, preguntas, conTyd) {
+  const sh = ss_().getSheetByName(nombreHoja);
   const mapa = {};
   if (!sh || sh.getLastRow() < 2) return mapa;
   const datos = sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn(), 1)).getValues();
   const enc = datos[0].map(limpiar_);
+  const iPor = enc.indexOf(limpiar_(ENC_TYD_POR)), iFecha = enc.indexOf(limpiar_(ENC_TYD_FECHA));
   datos.slice(1).forEach(function (r) {
     const num = String(r[0]).trim();
     if (!num) return;
     const x = {};
-    const iPor = enc.indexOf(limpiar_(ENC_TYD_POR)), iFecha = enc.indexOf(limpiar_(ENC_TYD_FECHA));
-    x._tydPor = iPor >= 0 ? String(r[iPor] || '') : '';
-    x._tydFecha = iFecha >= 0 ? fecha_(r[iFecha]) : '';
-    PREGUNTAS_PMO.concat(PREGUNTAS_FACTIBILIDAD).forEach(function (p) {
+    if (conTyd) {
+      x._tydPor = iPor >= 0 ? String(r[iPor] || '') : '';
+      x._tydFecha = iFecha >= 0 ? fecha_(r[iFecha]) : '';
+    }
+    preguntas.forEach(function (p) {
       const i = enc.indexOf(limpiar_(p.texto));
       if (i < 0) return;
       let val = r[i];
@@ -1010,7 +1046,15 @@ function upsertEtapa_(etapa, numero, materialTxt, factUrl, estado, comentario, r
 
 /** Guarda las respuestas en la hoja Factibilidad buscando cada columna por su encabezado. */
 function registrarFactibilidad_(numero, respuestas, url, fecha) {
-  const sh = hoja_(CONFIG.HOJAS.FACTIBILIDAD, ['Solicitud']);
+  registrarRespuestas_(CONFIG.HOJAS.FACTIBILIDAD, numero, respuestas, url, fecha);
+}
+
+function registrarRespuestasPmo_(numero, respuestas, url, fecha) {
+  registrarRespuestas_(CONFIG.HOJAS.RESPUESTAS_PMO, numero, respuestas, url, fecha);
+}
+
+function registrarRespuestas_(nombreHoja, numero, respuestas, url, fecha) {
+  const sh = hoja_(nombreHoja, ['Solicitud']);
   const nombres = ['Solicitud'].concat(respuestas.map(function (r) { return r.pregunta; }), ['Link archivo', 'Fecha']);
   const valores = [numero].concat(respuestas.map(function (r) { return seguro_(r.respuesta); }), [url, fecha]);
 
@@ -1193,6 +1237,7 @@ function configurarHojas() {
   ETAPAS.forEach(function (e) { if (e.hoja) hoja_(e.hoja, ENC_ETAPA); });
   hoja_(CONFIG.HOJAS.HISTORIAL, ENC_HISTORIAL);
   hoja_(CONFIG.HOJAS.FACTIBILIDAD, ['Solicitud']);
+  hoja_(CONFIG.HOJAS.RESPUESTAS_PMO, ['Solicitud']);
   DriveApp.getFolderById(CONFIG.CARPETA_FACTIBILIDAD_ID).getName();
   return 'Hojas listas. Materiales en catálogo: ' + refrescarCatalogo();
 }

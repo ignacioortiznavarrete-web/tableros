@@ -275,9 +275,11 @@
           '<input class="input" name="proyecto" placeholder="Ej. Línea Melamina Norte"' + v(ed && sol.proyecto) + '></div>' +
         '<div class="field"><label>Solicitante <span class="req">*</span></label>' +
           '<input class="input" name="solicitante" value="' + esc(ed ? sol.solicitante : nombreDesdeCorreo(d.usuario)) + '"></div>' +
-        '<div class="field"><label>¿Es de exportación? <span class="req">*</span></label>' +
-          '<select class="select" name="exportacion">' + opcionesSiNo(ed ? (sol.exportacion ? 'Sí' : 'No') : '') + '</select>' +
-          '<span class="hint">Si es Sí, se agrega Operaciones Portuarias al final.</span></div>' +
+        '<div class="field"><label>Destino del producto</label>' +
+          '<label class="chk"><input type="checkbox" name="exportacion"' + (ed && sol.exportacion ? ' checked' : '') + '>' +
+            '<span class="chk-box" aria-hidden="true"></span>' +
+            '<span><b>Exportación</b><small data-destino>' + (ed && sol.exportacion ? 'Internacional' : 'Sin marcar = Nacional') + '</small></span></label>' +
+          '<span class="hint">Si es exportación, se agrega Operaciones Portuarias al final.</span></div>' +
         '<div class="field"><label>¿Requiere producción? <span class="req">*</span></label>' +
           '<select class="select" name="produccion">' + opcionesSiNo(ed ? (sol.produccion ? 'Sí' : 'No') : '') + '</select>' +
           '<span class="hint">Si es Sí, se agrega Producción antes de Operaciones.</span></div>' +
@@ -365,7 +367,8 @@
     selTipo.addEventListener('change', onTipo);
     selSub.addEventListener('change', onSub);
     function onRuta() {
-      const flags = { exportacion: form.elements.exportacion.value === 'Sí', produccion: form.elements.produccion.value === 'Sí' };
+      const flags = { exportacion: form.elements.exportacion.checked, produccion: form.elements.produccion.value === 'Sí' };
+      form.querySelector('[data-destino]').textContent = flags.exportacion ? 'Internacional' : 'Sin marcar = Nacional';
       const pasos = APP.data.pasos.filter(function (p) { return !p.condicion || flags[p.condicion]; }).map(function (p) {
         return p.etapas.map(function (id) { return etapa(id).nombre; }).join(' + ');
       });
@@ -398,7 +401,7 @@
       material: el.material.value,
       tipo: el.tipo.value,
       subfamilia: el.subfamilia.value,
-      exportacion: el.exportacion.value,
+      exportacion: el.exportacion.checked ? 'Sí' : 'No',
       produccion: el.produccion.value,
       respuestas: {}
     };
@@ -409,7 +412,6 @@
     function marcar(control, etiqueta) { control.classList.add('invalid'); faltan.push(etiqueta); }
     if (!datos.proyecto.trim()) marcar(el.proyecto, 'Proyecto');
     if (!datos.solicitante.trim()) marcar(el.solicitante, 'Solicitante');
-    if (!datos.exportacion) marcar(el.exportacion, '¿Es de exportación?');
     if (!datos.produccion) marcar(el.produccion, '¿Requiere producción?');
     const valido = APP.data.catalogo.some(function (x) {
       return norm(x.d) === norm(datos.material) && x.t === datos.tipo && x.s === datos.subfamilia;
@@ -696,7 +698,7 @@
           '<span>Subfamilia: <b>' + esc(s.subfamilia) + '</b></span>' +
           '<span>Solicitante: <b>' + esc(s.solicitante) + '</b></span>' +
           '<span>' + esc(s.fecha) + '</span>' +
-          (s.exportacion ? '<span class="tag">Exportación</span>' : '') +
+          '<span class="tag">' + (s.exportacion ? 'Exportación' : 'Nacional') + '</span>' +
           '<span class="tag ' + (s.tydRespondida ? 'ok' : 'warn') + '">Factibilidad T&D: ' + (s.tydRespondida ? 'respondida' : 'pendiente') + '</span>' +
           (s.produccion ? '<span class="tag">Producción</span>' : '') +
         '</div></div>' +
