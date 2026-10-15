@@ -152,7 +152,7 @@
     renderFlow();
     const main = document.getElementById('main');
     main.innerHTML = APP.vista === 'SOLICITUD' ? vistaSolicitud() : vistaEtapa(APP.vista);
-    if (APP.vista === 'SOLICITUD') initFormulario();
+    if (APP.vista === 'SOLICITUD') initFormulario(document.getElementById('form-sol'));
     if (APP.foco) {
       const el = document.getElementById('req-' + APP.foco);
       if (el) {
@@ -191,71 +191,83 @@
       '</div>';
   }
 
-  function formularioHtml() {
+  /** Formulario de solicitud. Si se pasa `sol`, es el formulario de edición del PMO. */
+  function formularioHtml(sol) {
     const d = APP.data;
+    const ed = !!sol;
+    const sfx = ed ? '-e' : '';
+    function v(x) { return ed ? ' value="' + esc(x) + '"' : ''; }
+    function opcionesSiNo(actual) {
+      return '<option value="">Selecciona…</option>' + ['Sí', 'No'].map(function (o) {
+        return '<option' + (actual === o ? ' selected' : '') + '>' + o + '</option>';
+      }).join('');
+    }
     const preguntas = d.preguntas.map(function (p) {
       const req = p.requerida ? ' <span class="req">*</span>' : '';
       const full = p.tipo === 'textarea' ? ' full' : '';
       let control;
+      const actual = ed ? (sol.factibilidad[p.id] || '') : '';
       if (p.tipo === 'select') {
         control = '<select class="select" name="f_' + p.id + '"><option value="">Selecciona…</option>' +
-          p.opciones.map(function (o) { return '<option>' + esc(o) + '</option>'; }).join('') + '</select>';
+          p.opciones.map(function (o) { return '<option' + (actual === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
       } else if (p.tipo === 'textarea') {
-        control = '<textarea class="textarea" name="f_' + p.id + '"></textarea>';
+        control = '<textarea class="textarea" name="f_' + p.id + '">' + esc(actual) + '</textarea>';
       } else {
         control = '<input class="input" type="' + (p.tipo === 'number' ? 'number' : p.tipo) +
-          '" step="any" name="f_' + p.id + '">';
+          '" step="any" name="f_' + p.id + '"' + v(actual) + '>';
       }
       return '<div class="field' + full + '"><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
     }).join('');
 
     const descripciones = unicos(d.catalogo.map(function (x) { return x.d; })).sort();
 
-    return '<form class="card-body" id="form-sol" autocomplete="off" novalidate>' +
+    return '<form class="card-body" id="form-sol' + sfx + '"' + (ed ? ' data-num="' + esc(sol.numero) + '"' : '') +
+      ' autocomplete="off" novalidate>' +
       '<div class="section-title">Datos generales</div>' +
       '<div class="fields">' +
         '<div class="field"><label>Nombre del proyecto <span class="req">*</span></label>' +
-          '<input class="input" name="proyecto" placeholder="Ej. Línea Melamina Norte"></div>' +
+          '<input class="input" name="proyecto" placeholder="Ej. Línea Melamina Norte"' + v(ed && sol.proyecto) + '></div>' +
         '<div class="field"><label>Solicitante <span class="req">*</span></label>' +
-          '<input class="input" name="solicitante" value="' + esc(nombreDesdeCorreo(d.usuario)) + '"></div>' +
+          '<input class="input" name="solicitante" value="' + esc(ed ? sol.solicitante : nombreDesdeCorreo(d.usuario)) + '"></div>' +
         '<div class="field"><label>¿Es de exportación? <span class="req">*</span></label>' +
-          '<select class="select" name="exportacion"><option value="">Selecciona…</option><option>Sí</option><option>No</option></select>' +
+          '<select class="select" name="exportacion">' + opcionesSiNo(ed ? (sol.exportacion ? 'Sí' : 'No') : '') + '</select>' +
           '<span class="hint">Si es Sí, se agrega Operaciones Portuarias al final.</span></div>' +
         '<div class="field"><label>¿Requiere producción? <span class="req">*</span></label>' +
-          '<select class="select" name="produccion"><option value="">Selecciona…</option><option>Sí</option><option>No</option></select>' +
+          '<select class="select" name="produccion">' + opcionesSiNo(ed ? (sol.produccion ? 'Sí' : 'No') : '') + '</select>' +
           '<span class="hint">Si es Sí, se agrega Producción antes de Operaciones.</span></div>' +
-        '<div class="route" id="ruta"></div>' +
+        '<div class="route" data-ruta></div>' +
       '</div>' +
 
       '<div class="section-title">Material</div>' +
       '<div class="fields">' +
         '<div class="field full"><label>Material (descripción) <span class="req">*</span></label>' +
-          '<input class="input" name="material" list="dl-mat" placeholder="Escribe para buscar… ej. MDF STD">' +
-          '<datalist id="dl-mat">' + descripciones.map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>' +
-          '<span class="hint" id="hint-mat">' + descripciones.length + ' materiales disponibles en Reglas.</span></div>' +
+          '<input class="input" name="material" list="dl-mat' + sfx + '" placeholder="Escribe para buscar… ej. MDF STD"' + v(ed && sol.material) + '>' +
+          '<datalist id="dl-mat' + sfx + '">' + descripciones.map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>' +
+          '<span class="hint" data-hint>' + descripciones.length + ' materiales disponibles en Reglas.</span></div>' +
         '<div class="field"><label>Tipo de material <span class="req">*</span></label>' +
           '<select class="select" name="tipo" disabled><option value="">Primero elige el material</option></select></div>' +
         '<div class="field"><label>Subfamilia <span class="req">*</span></label>' +
           '<select class="select" name="subfamilia" disabled><option value="">Primero elige el tipo</option></select></div>' +
-        '<div class="match" id="match">✓ <span></span></div>' +
+        '<div class="match" data-match>✓ <span></span></div>' +
       '</div>' +
 
       '<div class="section-title">Factibilidad</div>' +
       '<div class="fields">' + preguntas + '</div>' +
 
       '<div class="actions">' +
-        '<button type="reset" class="btn btn-ghost">Limpiar</button>' +
-        '<button type="submit" class="btn btn-primary">Ingresar solicitud</button>' +
+        (ed ? '<button type="button" class="btn btn-ghost" data-cancelar>Cancelar</button>' +
+              '<button type="submit" class="btn btn-primary">Guardar cambios</button>'
+            : '<button type="reset" class="btn btn-ghost">Limpiar</button>' +
+              '<button type="submit" class="btn btn-primary">Ingresar solicitud</button>') +
       '</div>' +
       '</form>';
   }
 
-  function initFormulario() {
-    const form = document.getElementById('form-sol');
+  function initFormulario(form, sol) {
     if (!form) return;
     const cat = APP.data.catalogo;
     const inMat = form.elements.material, selTipo = form.elements.tipo, selSub = form.elements.subfamilia;
-    const hint = document.getElementById('hint-mat'), match = document.getElementById('match');
+    const hint = form.querySelector('[data-hint]'), match = form.querySelector('[data-match]');
 
     function filasMaterial() {
       const v = norm(inMat.value);
@@ -312,7 +324,7 @@
       const pasos = APP.data.pasos.filter(function (p) { return !p.condicion || flags[p.condicion]; }).map(function (p) {
         return p.etapas.map(function (id) { return etapa(id).nombre; }).join(' + ');
       });
-      document.getElementById('ruta').innerHTML = '<b>Recorrido:</b> Solicitud → ' + pasos.map(esc).join(' → ');
+      form.querySelector('[data-ruta]').innerHTML = '<b>Recorrido:</b> Solicitud → ' + pasos.map(esc).join(' → ');
     }
     form.elements.exportacion.addEventListener('change', onRuta);
     form.elements.produccion.addEventListener('change', onRuta);
@@ -320,6 +332,12 @@
     onRuta();
     form.addEventListener('reset', function () { setTimeout(onMaterial, 0); });
     form.addEventListener('submit', enviarSolicitud);
+
+    if (sol) {   // edición: precargar la combinación guardada
+      onMaterial();
+      selTipo.value = sol.tipo; onTipo();
+      selSub.value = sol.subfamilia; onSub();
+    }
   }
 
   function enviarSolicitud(ev) {
@@ -366,6 +384,25 @@
       return;
     }
 
+    if (form.dataset.num) {
+      const num = form.dataset.num;
+      cargando(btn, true, 'Guardando…');
+      google.script.run
+        .withSuccessHandler(function (lista) {
+          document.getElementById('modal').hidden = true;
+          APP.data.solicitudes = lista;
+          const s = lista.filter(function (x) { return x.numero === num; })[0];
+          const pend = s ? APP.data.etapas.filter(function (e) { return pendienteEn(s, e.id); }) : [];
+          if (APP.vista !== 'SOLICITUD' && pend.length) APP.vista = pend[0].id;
+          APP.filtro = 'etapa'; APP.foco = num;
+          render();
+          toast(num + ' actualizada' + (s ? ' · ' + s.estado : ''), 'ok');
+        })
+        .withFailureHandler(function (err) { cargando(btn, false); errorToast(err); })
+        .editarSolicitud(num, datos);
+      return;
+    }
+
     cargando(btn, true, 'Creando solicitud…');
     google.script.run
       .withSuccessHandler(function (res) {
@@ -399,6 +436,28 @@
         render();
       }
     };
+  }
+
+  function abrirEdicion(num) {
+    const s = APP.data.solicitudes.filter(function (x) { return x.numero === num; })[0];
+    if (!s) return;
+    const reinicia = s.etapaActual !== 'PMO';
+    const primero = APP.data.pasos[1];
+    const m = document.getElementById('modal');
+    m.innerHTML = '<div class="modal wide" role="dialog" aria-modal="true">' +
+      '<div class="modal-head"><div><div class="req-num">' + esc(s.numero) + '</div><h3>Editar solicitud</h3></div>' +
+        '<button class="btn btn-ghost btn-sm" data-cancelar aria-label="Cerrar">✕</button></div>' +
+      '<div class="notice' + (reinicia ? ' warn' : '') + '">' +
+        (reinicia ? '<b>Atención:</b> al guardar, la solicitud vuelve a <b>' + esc(primero.nombre) + '</b> (' +
+            esc(primero.etapas.map(function (id) { return etapa(id).nombre; }).join(' y ')) +
+            ') y se reinician todas las aprobaciones posteriores.'
+          : 'La solicitud aún está en PMO; los cambios no reinician el flujo.') +
+      '</div>' + formularioHtml(s) + '</div>';
+    m.hidden = false;
+    m.onclick = function (ev) {
+      if (ev.target === m || ev.target.closest('[data-cancelar]')) m.hidden = true;
+    };
+    initFormulario(document.getElementById('form-sol-e'), s);
   }
 
   /* ---------- Vista: Etapa ---------- */
@@ -477,6 +536,7 @@
       (s.factibilidadUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.factibilidadUrl) + '">📄 Factibilidad</a>' : '') +
       (s.carpetaUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.carpetaUrl) + '">📁 Carpeta</a>' : '') +
       (s.griffing ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.griffing) + '">Griffing</a>' : '') +
+      (esMio('PMO') ? '<button class="btn btn-ghost btn-sm" data-editar="' + esc(s.numero) + '">✎ Editar solicitud</button>' : '') +
       '</div>';
 
     const puedeActuar = APP.vista !== 'SOLICITUD' && pendienteEn(s, vista) && esMio(vista);
@@ -508,7 +568,7 @@
 
     const notas = APP.data.etapas.map(function (e, i) {
       const st = s.etapas[i] || {};
-      if (!st.estado || !st.aplica) return '';
+      if (!st.estado || !st.aplica || st.estado === 'Reiniciado') return '';
       return '<div class="note"><h4>' + esc(e.nombre) + '</h4>' +
         '<span class="pill ' + clasePill(st.estado) + '">' + esc(st.estado) + '</span>' +
         (st.comentario ? '<p>' + esc(st.comentario) + '</p>' : '') +
@@ -552,6 +612,8 @@
     const f = ev.target.closest('[data-filtro]');
     if (f) { APP.filtro = f.dataset.filtro; render(); return; }
     if (ev.target.closest('[data-refrescar]')) { refrescar(); return; }
+    const ed = ev.target.closest('[data-editar]');
+    if (ed) { abrirEdicion(ed.dataset.editar); return; }
     const ir = ev.target.closest('[data-ir]');
     if (ir) {
       const s = APP.data.solicitudes.filter(function (x) { return x.numero === ir.dataset.ir; })[0];

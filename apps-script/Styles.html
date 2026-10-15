@@ -335,6 +335,17 @@
   .modal h3 { margin: 0 0 6px; font-size: 20px; }
   .modal p { color: var(--muted); margin: 0 0 18px; }
   .modal .num { font-size: 26px; font-weight: 800; color: var(--primary); letter-spacing: .02em; margin-bottom: 4px; }
+  .modal.wide {
+    max-width: 860px; text-align: left; padding: 0; max-height: calc(100vh - 32px); overflow-y: auto;
+  }
+  .modal.wide .modal-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+    padding: 22px 22px 12px; position: sticky; top: 0; background: var(--surface); z-index: 2;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal.wide .modal-head h3 { margin: 2px 0 0; }
+  .modal.wide .notice { margin: 16px 22px 0; }
+  .notice.warn { background: var(--warn-soft); color: #78350f; }
   .modal .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 
   @media (max-width: 960px) {

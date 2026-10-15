@@ -200,17 +200,9 @@ function crearSolicitud(datos) {
     throw new Error('Sólo el PMO (' + etapa_('PMO').emails.join(', ') + ') puede ingresar solicitudes.');
   }
 
-  const proyecto = limpiar_(datos && datos.proyecto);
-  const solicitante = limpiar_(datos && datos.solicitante);
-  if (!proyecto) throw new Error('Debes indicar el nombre del proyecto.');
-  if (!solicitante) throw new Error('Debes indicar el nombre del solicitante.');
-  const exportacion = limpiar_(datos.exportacion);
-  const produccion = limpiar_(datos.produccion);
-  if (['Sí', 'No'].indexOf(exportacion) < 0) throw new Error('Indica si la solicitud es de exportación.');
-  if (['Sí', 'No'].indexOf(produccion) < 0) throw new Error('Indica si la solicitud requiere producción.');
-
-  const mat = validarMaterial_(datos.material, datos.tipo, datos.subfamilia);
-  const respuestas = validarFactibilidad_(datos.factibilidad || {});
+  const v = validarDatos_(datos);
+  const proyecto = v.proyecto, solicitante = v.solicitante, exportacion = v.exportacion,
+        produccion = v.produccion, mat = v.mat, respuestas = v.respuestas;
 
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -261,6 +253,126 @@ function crearSolicitud(datos) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Valida los datos del formulario (crear y editar). */
+function validarDatos_(datos) {
+  datos = datos || {};
+  const v = {
+    proyecto: limpiar_(datos.proyecto),
+    solicitante: limpiar_(datos.solicitante),
+    exportacion: limpiar_(datos.exportacion),
+    produccion: limpiar_(datos.produccion)
+  };
+  if (!v.proyecto) throw new Error('Debes indicar el nombre del proyecto.');
+  if (!v.solicitante) throw new Error('Debes indicar el nombre del solicitante.');
+  if (['Sí', 'No'].indexOf(v.exportacion) < 0) throw new Error('Indica si la solicitud es de exportación.');
+  if (['Sí', 'No'].indexOf(v.produccion) < 0) throw new Error('Indica si la solicitud requiere producción.');
+  v.mat = validarMaterial_(datos.material, datos.tipo, datos.subfamilia);
+  v.respuestas = validarFactibilidad_(datos.factibilidad || {});
+  return v;
+}
+
+/* ============================================================================
+ *  Editar solicitud (sólo PMO, en cualquier etapa)
+ *  Si la solicitud ya pasó la aprobación del PMO, vuelve a la primera
+ *  liberación y se reinician todas las aprobaciones posteriores.
+ * ========================================================================== */
+
+function editarSolicitud(numero, datos) {
+  const usuario = usuarioActual_();
+  if (!puede_(usuario, 'PMO')) {
+    throw new Error('Sólo el PMO (' + etapa_('PMO').emails.join(', ') + ') puede editar solicitudes.');
+  }
+  const v = validarDatos_(datos);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  let destino = null;
+  let datosCorreo;
+  try {
+    const sh = hoja_(CONFIG.HOJAS.SOLICITUDES, ENC_SOL);
+    const fila = buscarFila_(sh, numero);
+    if (!fila) throw new Error('No existe la solicitud ' + numero);
+    const r = sh.getRange(fila, 1, 1, ENC_SOL.length).getValues()[0];
+    const ahora = new Date();
+
+    // Cambios (para el historial)
+    const antes = {
+      Proyecto: r[COL_SOL.PROYECTO - 1], Solicitante: r[COL_SOL.SOLICITANTE - 1],
+      Material: textoMaterial_(r[COL_SOL.MATERIAL - 1], r[COL_SOL.TIPO - 1], r[COL_SOL.SUBFAMILIA - 1]),
+      'Exportación': r[COL_SOL.EXPORTACION - 1] || 'No', 'Producción': r[COL_SOL.PRODUCCION - 1] || 'No'
+    };
+    const despues = {
+      Proyecto: v.proyecto, Solicitante: v.solicitante, Material: textoMaterial_(v.mat.d, v.mat.t, v.mat.s),
+      'Exportación': v.exportacion, 'Producción': v.produccion
+    };
+    const cambios = Object.keys(antes).filter(function (k) { return String(antes[k]) !== String(despues[k]); })
+      .map(function (k) { return k + ': ' + antes[k] + ' → ' + despues[k]; });
+
+    // Archivo y carpeta
+    const carpeta = carpetaProyecto_(v.solicitante, v.proyecto);
+    const archivo = actualizarArchivoFactibilidad_(r[COL_SOL.FACTIBILIDAD - 1], carpeta, {
+      numero: numero, proyecto: v.proyecto, solicitante: v.solicitante, correo: r[COL_SOL.CORREO - 1] || usuario,
+      fecha: r[COL_SOL.FECHA - 1], editado: ahora, material: v.mat, respuestas: v.respuestas,
+      exportacion: v.exportacion, produccion: v.produccion
+    });
+
+    // Datos de la solicitud
+    r[COL_SOL.MATERIAL - 1] = seguro_(v.mat.d);
+    r[COL_SOL.TIPO - 1] = v.mat.t;
+    r[COL_SOL.SUBFAMILIA - 1] = v.mat.s;
+    r[COL_SOL.SOLICITANTE - 1] = seguro_(v.solicitante);
+    r[COL_SOL.PROYECTO - 1] = seguro_(v.proyecto);
+    r[COL_SOL.EXPORTACION - 1] = v.exportacion;
+    r[COL_SOL.PRODUCCION - 1] = v.produccion;
+    r[COL_SOL.FACTIBILIDAD - 1] = archivo.getUrl();
+    r[COL_SOL.CARPETA - 1] = carpeta.getUrl();
+    r[COL_SOL.ACTUALIZADO - 1] = ahora;
+
+    // Reinicio del flujo
+    const flags = flagsFila_(r);
+    const pasoActual = pasoActualFila_(r);
+    const materialTxt = textoMaterial_(v.mat.d, v.mat.t, v.mat.s);
+    if (pasoActual !== 'PMO') {
+      destino = siguientePaso_('PMO', flags);
+      r[COL_SOL.ESTADO_PMO - 1] = 'Aprobado';
+      r[COL_SOL.ETAPA - 1] = destino.id;
+      r[COL_SOL.ESTADO - 1] = 'En ' + destino.nombre + ' · editada por PMO';
+      ETAPAS.forEach(function (e) {
+        if (!e.hoja) return;
+        const enDestino = e.paso === destino.id && aplica_(e, flags);
+        const filaEtapa = buscarFila_(hoja_(e.hoja, ENC_ETAPA), numero);
+        if (enDestino) {
+          upsertEtapa_(e, numero, materialTxt, archivo.getUrl(), 'Pendiente', 'Reiniciada por edición del PMO',
+            e.emails.join(', '), ahora);
+        } else if (filaEtapa) {
+          upsertEtapa_(e, numero, materialTxt, archivo.getUrl(), 'Reiniciado', '', '', ahora);
+        }
+      });
+    }
+    sh.getRange(fila, 1, 1, ENC_SOL.length).setValues([r]);
+
+    registrarFactibilidad_(numero, v.respuestas, archivo.getUrl(), ahora);
+    registrarHistorial_(numero, 'PMO', 'Editada',
+      (cambios.length ? cambios.join(' · ') : 'Cambios en factibilidad') +
+      (destino ? ' · Vuelve a ' + destino.nombre : ''), usuario, ahora);
+    SpreadsheetApp.flush();
+
+    datosCorreo = {
+      numero: numero, proyecto: v.proyecto, material: materialTxt, factUrl: archivo.getUrl(),
+      etapa: 'PMO', estado: 'Editada', comentario: cambios.join('\n'), usuario: usuario
+    };
+  } finally {
+    lock.releaseLock();
+  }
+
+  if (destino) {
+    const correos = [].concat.apply([], destino.etapas.map(function (e) { return e.emails; }));
+    notificar_(correos, '[' + numero + '] Solicitud editada: vuelve a ' + destino.nombre, datosCorreo,
+      'El PMO editó la solicitud. Vuelve a <b>' + destino.nombre + '</b> y requiere nuevamente tu revisión.');
+  }
+  return listarSolicitudes_();
 }
 
 /* ============================================================================
@@ -494,11 +606,36 @@ function obtenerOCrearCarpeta_(padre, nombre) {
 }
 
 function crearArchivoFactibilidad_(carpeta, info) {
-  const nombre = 'Factibilidad ' + info.numero + ' - ' + nombreSeguro_(info.proyecto);
-  const libro = SpreadsheetApp.create(nombre);
+  const libro = SpreadsheetApp.create(nombreFactibilidad_(info));
   const sh = libro.getSheets()[0];
   sh.setName('Factibilidad');
+  escribirFactibilidad_(sh, info);
 
+  const archivo = DriveApp.getFileById(libro.getId());
+  archivo.moveTo(carpeta);
+  return archivo;
+}
+
+/** Reescribe el archivo de factibilidad existente (edición del PMO) y lo mueve a `carpeta`. */
+function actualizarArchivoFactibilidad_(url, carpeta, info) {
+  const m = String(url || '').match(/\/d\/([-\w]{20,})/);
+  if (!m) return crearArchivoFactibilidad_(carpeta, info);
+  const libro = SpreadsheetApp.openById(m[1]);
+  const sh = libro.getSheetByName('Factibilidad') || libro.getSheets()[0];
+  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
+  sh.clear();
+  escribirFactibilidad_(sh, info);
+  libro.rename(nombreFactibilidad_(info));
+  const archivo = DriveApp.getFileById(m[1]);
+  archivo.moveTo(carpeta);
+  return archivo;
+}
+
+function nombreFactibilidad_(info) {
+  return 'Factibilidad ' + info.numero + ' - ' + nombreSeguro_(info.proyecto);
+}
+
+function escribirFactibilidad_(sh, info) {
   const filas = [
     ['Factibilidad de material', ''],
     ['', ''],
@@ -506,7 +643,7 @@ function crearArchivoFactibilidad_(carpeta, info) {
     ['Proyecto', seguro_(info.proyecto)],
     ['Solicitante', seguro_(info.solicitante)],
     ['Correo', info.correo],
-    ['Fecha', fecha_(info.fecha)],
+    ['Fecha', fecha_(info.fecha) + (info.editado ? ' · editada ' + fecha_(info.editado) : '')],
     ['Material (descripción)', info.material.d],
     ['Tipo de material', info.material.t],
     ['Subfamilia', info.material.s + (info.material.sn ? ' — ' + info.material.sn : '')],
@@ -531,10 +668,6 @@ function crearArchivoFactibilidad_(carpeta, info) {
   sh.setColumnWidth(2, 420);
   sh.setFrozenRows(1);
   SpreadsheetApp.flush();
-
-  const archivo = DriveApp.getFileById(libro.getId());
-  archivo.moveTo(carpeta);
-  return archivo;
 }
 
 /* ============================================================================
@@ -550,6 +683,7 @@ function listarSolicitudes_() {
   const porEtapa = {};
   ETAPAS.forEach(function (e) { if (e.hoja) porEtapa[e.id] = leerEtapa_(e); });
   const historial = leerHistorial_();
+  const respuestas = leerFactibilidad_();
   const pmo = etapa_('PMO');
 
   return valores
@@ -594,7 +728,8 @@ function listarSolicitudes_() {
             actualizado: x.actualizado || '', aplica: aplica
           };
         }),
-        historial: historial[numero] || []
+        historial: historial[numero] || [],
+        factibilidad: respuestas[numero] || {}
       };
     })
     .reverse();
@@ -614,6 +749,31 @@ function leerEtapa_(etapa) {
       responsable: String(r[COL_ETAPA.RESPONSABLE - 1] || ''),
       actualizado: fecha_(r[COL_ETAPA.ACTUALIZADO - 1])
     };
+  });
+  return mapa;
+}
+
+/** Respuestas de factibilidad por solicitud: { 'SOL-0001': { idPregunta: valor } } */
+function leerFactibilidad_() {
+  const sh = ss_().getSheetByName(CONFIG.HOJAS.FACTIBILIDAD);
+  const mapa = {};
+  if (!sh || sh.getLastRow() < 2) return mapa;
+  const datos = sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn(), 1)).getValues();
+  const enc = datos[0].map(limpiar_);
+  datos.slice(1).forEach(function (r) {
+    const num = String(r[0]).trim();
+    if (!num) return;
+    const x = {};
+    PREGUNTAS_FACTIBILIDAD.forEach(function (p) {
+      const i = enc.indexOf(limpiar_(p.texto));
+      if (i < 0) return;
+      let val = r[i];
+      if (val instanceof Date) {
+        val = Utilities.formatDate(val, CONFIG.ZONA_HORARIA, p.tipo === 'date' ? 'yyyy-MM-dd' : 'dd-MM-yyyy');
+      }
+      x[p.id] = String(val == null ? '' : val).replace(/^'/, '');
+    });
+    mapa[num] = x;
   });
   return mapa;
 }
@@ -647,7 +807,10 @@ function upsertEtapa_(etapa, numero, materialTxt, factUrl, estado, comentario, r
 function registrarFactibilidad_(numero, respuestas, url, fecha) {
   const enc = ['Solicitud'].concat(PREGUNTAS_FACTIBILIDAD.map(function (p) { return p.texto; }), ['Link archivo', 'Fecha']);
   const sh = hoja_(CONFIG.HOJAS.FACTIBILIDAD, enc);
-  sh.appendRow([numero].concat(respuestas.map(function (r) { return seguro_(r.respuesta); }), [url, fecha]));
+  const valores = [numero].concat(respuestas.map(function (r) { return seguro_(r.respuesta); }), [url, fecha]);
+  const fila = buscarFila_(sh, numero);
+  if (fila) sh.getRange(fila, 1, 1, valores.length).setValues([valores]);
+  else sh.appendRow(valores);
 }
 
 function registrarHistorial_(numero, etapa, estado, comentario, usuario, fecha) {

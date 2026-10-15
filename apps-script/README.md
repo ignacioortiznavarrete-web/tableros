@@ -75,5 +75,11 @@ Todo se registra en la planilla *Tableros*.
   Sólo el responsable puede cambiar el estado (*Pendiente, En revisión, Aprobado, Rechazado*) y
   comentar, y sólo cuando la solicitud está en su etapa. Al **aprobar** pasa a la siguiente etapa
   y se envía un correo al siguiente responsable; **rechazar** exige comentario.
+- **Edición por el PMO**: en cualquier etapa (incluso rechazada o finalizada) el PMO puede usar
+  *✎ Editar solicitud* para cambiar proyecto, solicitante, material, exportación/producción y
+  factibilidad (se valida igual que al crear). Si la solicitud ya había pasado la aprobación del PMO,
+  **vuelve a la primera liberación (Costos y T&D)**: esas etapas quedan *Pendiente* y las
+  posteriores quedan *Reiniciado* hasta que el flujo las alcance de nuevo. El archivo de factibilidad
+  se reescribe (y se mueve si cambió solicitante/proyecto), y el cambio queda en `Historial`.
 - **Griffing**: la columna y la hoja ya existen; se integrará más adelante
   (los archivos podrán guardarse en la misma carpeta `<Solicitante>/<Proyecto>`).
