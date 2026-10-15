@@ -34,8 +34,9 @@ const CONFIG = {
     FACTIBILIDAD: 'Factibilidad',
     HISTORIAL: 'Historial'
   },
-  // Correos con permiso total (pueden actuar en cualquier etapa). Opcional.
-  ADMINS: []
+  // Rol Administrador: puede crear, editar y cambiar el estado en TODAS las etapas
+  // (útil para probar el flujo completo). Quitar el correo al pasar a producción.
+  ADMINS: ['giovanna.espinoza@masisa.com']
 };
 
 /**
@@ -122,6 +123,7 @@ function getInicio() {
   const usuario = usuarioActual_();
   return {
     usuario: usuario,
+    admin: esAdmin_(usuario),
     roles: ETAPAS.filter(function (e) { return puede_(usuario, e.id); }).map(function (e) { return e.id; }),
     etapas: ETAPAS.map(function (e) {
       return { id: e.id, nombre: e.nombre, emails: e.emails, paso: e.paso, condicion: e.condicion || '' };
@@ -920,9 +922,13 @@ function usuarioActual_() {
   return email;
 }
 
+function esAdmin_(email) {
+  return CONFIG.ADMINS.map(lower_).indexOf(String(email || '').toLowerCase().trim()) >= 0;
+}
+
 function puede_(email, etapaId) {
   email = String(email || '').toLowerCase();
-  if (CONFIG.ADMINS.map(lower_).indexOf(email) >= 0) return true;
+  if (esAdmin_(email)) return true;
   const e = etapa_(etapaId);
   return !!e && e.emails.map(lower_).indexOf(email) >= 0;
 }

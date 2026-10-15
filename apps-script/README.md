@@ -75,6 +75,9 @@ Todo se registra en la planilla *Tableros*.
   Sólo el responsable puede cambiar el estado (*Pendiente, En revisión, Aprobado, Rechazado*) y
   comentar, y sólo cuando la solicitud está en su etapa. Al **aprobar** pasa a la siguiente etapa
   y se envía un correo al siguiente responsable; **rechazar** exige comentario.
+- **Rol Administrador** (`CONFIG.ADMINS`, hoy `giovanna.espinoza@masisa.com`): puede crear,
+  editar y aprobar/rechazar en todas las etapas para probar el flujo. Se ve con la etiqueta
+  *Administrador* en la cabecera. Quitar el correo de `ADMINS` cuando termine la prueba.
 - **Edición por el PMO**: en cualquier etapa (incluso rechazada o finalizada) el PMO puede usar
   *✎ Editar solicitud* para cambiar proyecto, solicitante, material, exportación/producción y
   factibilidad (se valida igual que al crear). Si la solicitud ya había pasado la aprobación del PMO,

@@ -92,7 +92,8 @@
 
   function renderUser() {
     const d = APP.data;
-    const roles = d.roles.map(function (r) { return '<span class="role">' + esc(etapa(r).nombre) + '</span>'; }).join('');
+    const roles = d.admin ? '<span class="role admin" title="Puede actuar en todas las etapas">Administrador · todas las etapas</span>' :
+      d.roles.map(function (r) { return '<span class="role">' + esc(etapa(r).nombre) + '</span>'; }).join('');
     document.getElementById('user').innerHTML =
       '<span class="email">' + esc(d.usuario) + '</span>' + (roles || '<span class="role">Consulta</span>');
   }
