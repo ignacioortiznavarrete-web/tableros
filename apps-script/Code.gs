@@ -64,8 +64,42 @@ const ALIAS_PASO = { COSTOS: 'LIBERACIONES' };
 
 const ESTADOS = ['Pendiente', 'En revisión', 'Aprobado', 'Rechazado'];
 
+const SI_NO = ['SI', 'NO'];
+
+/** Encabezados extra en la hoja Factibilidad para la respuesta de T&D. */
+const ENC_TYD_POR = 'Respondida por (T&D)';
+const ENC_TYD_FECHA = 'Fecha respuesta (T&D)';
+
 /**
- * Preguntas de factibilidad: hoja "Planilla factibilidad téc. V1" de
+ * Preguntas que responde el PMO al crear la solicitud: hoja "PMO" de
+ * 1_Solicitud_Nuevos_Productos_V5_1.xlsx.
+ *
+ * PENDIENTE (celdas en amarillo = se buscarán en catálogos más adelante):
+ *   Familia, Sustrato, Espesor (mm), Ancho (mm), Largo (mm), Diseño, Textura, Acabado,
+ *   Tipo de Producto. Hoy el material se elige y valida contra la hoja "Reglas".
+ */
+const S_PMO = 'Solicitud PMO';
+const PREGUNTAS_PMO = [
+  { id: 'embalajePmo',      seccion: S_PMO, texto: '¿Tiene especificaciones especiales de Embalaje? (solicitud)', tipo: 'select',
+    opciones: SI_NO, requerida: true },
+  { id: 'embalajeCuales',   seccion: S_PMO, texto: '¿Cuáles especificaciones de Embalaje?',           tipo: 'textarea',
+    requerida: true, depende: { id: 'embalajePmo', valor: 'SI' } },
+  { id: 'destino',          seccion: S_PMO, texto: '¿Destino del Producto?',                          tipo: 'select',
+    opciones: ['NACIONAL', 'INTERNACIONAL'], requerida: true },
+  { id: 'textoComercial',   seccion: S_PMO, texto: 'Texto Comercial',                                 tipo: 'text',     requerida: true },
+  { id: 'descProyecto',     seccion: S_PMO, texto: 'Descripción Proyecto',                            tipo: 'textarea', requerida: true },
+  { id: 'categoria',        seccion: S_PMO, texto: 'Categoría de Productos',                          tipo: 'text',     requerida: true },
+  { id: 'uso',              seccion: S_PMO, texto: 'Uso del Producto',                                tipo: 'select',   requerida: true,
+    opciones: ['Interior', 'Exterior', 'Moldaje', 'Construcción', 'Revestimiento', 'Otros'] },
+  { id: 'unidadProducto',   seccion: S_PMO, texto: 'Unidad de Medida del Producto',                   tipo: 'select',   requerida: true,
+    opciones: ['M2', 'M3', 'ML', 'Unidades', 'Kit'] },
+  { id: 'volumenUsd',       seccion: S_PMO, texto: 'Volumen estimado de venta mensual (USD) en m3',   tipo: 'number',   requerida: true },
+  { id: 'fechaLanzamiento', seccion: S_PMO, texto: 'Fecha estimada de lanzamiento',                   tipo: 'date',     requerida: true },
+  { id: 'comentariosPmo',   seccion: S_PMO, texto: 'Comentarios',                                     tipo: 'textarea', requerida: false }
+];
+
+/**
+ * Preguntas de factibilidad que responde T&D: hoja "Planilla factibilidad téc. V1" de
  * 1_Solicitud_Nuevos_Productos_V5.xlsx.
  *   tipo:      'text' | 'number' | 'date' | 'select' | 'textarea'
  *   seccion:   agrupa las preguntas en el formulario y en el archivo.
@@ -77,7 +111,6 @@ const ESTADOS = ['Pendiente', 'En revisión', 'Aprobado', 'Rechazado'];
  *   Acabado y Marca son "Automático" (se derivan del material).
  *   Tipo de material y Subfamilia ya se capturan hoy con la validación contra "Reglas".
  */
-const SI_NO = ['SI', 'NO'];
 const CENTROS = ['TCP1_Maderas Cabrero', 'TCP5_Tableros Mapal', 'TCP7_Tableros Cabrero'];
 const S_TEC = 'Factibilidad técnica';
 const S_VA = 'Valor agregado';
@@ -183,6 +216,7 @@ function getInicio() {
       return { id: p.id, nombre: p.nombre, etapas: p.etapas.map(function (e) { return e.id; }), condicion: p.condicion };
     }),
     estados: ESTADOS,
+    preguntasPmo: PREGUNTAS_PMO,
     preguntas: PREGUNTAS_FACTIBILIDAD,
     catalogo: getCatalogo_(),
     solicitudes: listarSolicitudes_(),
@@ -267,7 +301,7 @@ function crearSolicitud(datos) {
     const carpeta = carpetaProyecto_(solicitante, proyecto);
     const archivo = crearArchivoFactibilidad_(carpeta, {
       numero: numero, proyecto: proyecto, solicitante: solicitante, correo: usuario,
-      fecha: ahora, material: mat, respuestas: respuestas,
+      fecha: ahora, material: mat, respuestas: respuestasArchivo_(respuestas, null),
       exportacion: exportacion, produccion: produccion
     });
 
@@ -322,7 +356,7 @@ function validarDatos_(datos) {
   if (['Sí', 'No'].indexOf(v.exportacion) < 0) throw new Error('Indica si la solicitud es de exportación.');
   if (['Sí', 'No'].indexOf(v.produccion) < 0) throw new Error('Indica si la solicitud requiere producción.');
   v.mat = validarMaterial_(datos.material, datos.tipo, datos.subfamilia);
-  v.respuestas = validarFactibilidad_(datos.factibilidad || {});
+  v.respuestas = validarRespuestas_(PREGUNTAS_PMO, datos.respuestas || {}, 'Solicitud');
   return v;
 }
 
@@ -362,12 +396,18 @@ function editarSolicitud(numero, datos) {
     };
     const cambios = Object.keys(antes).filter(function (k) { return String(antes[k]) !== String(despues[k]); })
       .map(function (k) { return k + ': ' + antes[k] + ' → ' + despues[k]; });
+    const previas = leerFactibilidad_()[numero] || {};
+    PREGUNTAS_PMO.forEach(function (p) {
+      const nueva = v.respuestas.filter(function (x) { return x.id === p.id; })[0].respuesta;
+      if (String(previas[p.id] || '') !== String(nueva)) cambios.push(p.texto + ': ' + (previas[p.id] || '—') + ' → ' + nueva);
+    });
 
     // Archivo y carpeta
     const carpeta = carpetaProyecto_(v.solicitante, v.proyecto);
     const archivo = actualizarArchivoFactibilidad_(r[COL_SOL.FACTIBILIDAD - 1], carpeta, {
       numero: numero, proyecto: v.proyecto, solicitante: v.solicitante, correo: r[COL_SOL.CORREO - 1] || usuario,
-      fecha: r[COL_SOL.FECHA - 1], editado: ahora, material: v.mat, respuestas: v.respuestas,
+      fecha: r[COL_SOL.FECHA - 1], editado: ahora, material: v.mat,
+      respuestas: respuestasArchivo_(v.respuestas, leerFactibilidad_()[numero]),
       exportacion: v.exportacion, produccion: v.produccion
     });
 
@@ -408,7 +448,7 @@ function editarSolicitud(numero, datos) {
 
     registrarFactibilidad_(numero, v.respuestas, archivo.getUrl(), ahora);
     registrarHistorial_(numero, 'PMO', 'Editada',
-      (cambios.length ? cambios.join(' · ') : 'Cambios en factibilidad') +
+      (cambios.length ? cambios.join(' · ') : 'Sin cambios') +
       (destino ? ' · Vuelve a ' + destino.nombre : ''), usuario, ahora);
     SpreadsheetApp.flush();
 
@@ -424,6 +464,64 @@ function editarSolicitud(numero, datos) {
     const correos = [].concat.apply([], destino.etapas.map(function (e) { return e.emails; }));
     notificar_(correos, '[' + numero + '] Solicitud editada: vuelve a ' + destino.nombre, datosCorreo,
       'El PMO editó la solicitud. Vuelve a <b>' + destino.nombre + '</b> y requiere nuevamente tu revisión.');
+  }
+  return listarSolicitudes_();
+}
+
+/* ============================================================================
+ *  Respuesta de factibilidad (T&D)
+ * ========================================================================== */
+
+function responderFactibilidad(numero, entrada) {
+  const usuario = usuarioActual_();
+  const tyd = etapa_('TYD');
+  if (!puede_(usuario, 'TYD')) {
+    throw new Error('Sólo T&D (' + (tyd.emails.join(', ') || 'sin definir') + ') puede responder la factibilidad.');
+  }
+  const respuestas = validarRespuestas_(PREGUNTAS_FACTIBILIDAD, entrada || {}, 'Factibilidad');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sh = hoja_(CONFIG.HOJAS.SOLICITUDES, ENC_SOL);
+    const fila = buscarFila_(sh, numero);
+    if (!fila) throw new Error('No existe la solicitud ' + numero);
+    const r = sh.getRange(fila, 1, 1, ENC_SOL.length).getValues()[0];
+    if (pasoActualFila_(r) !== tyd.paso) {
+      throw new Error('La factibilidad sólo se responde cuando la solicitud está en ' + paso_(tyd.paso).nombre + '.');
+    }
+    if (estadoEtapa_(tyd, numero, r) === 'Aprobado') {
+      throw new Error('T&D ya aprobó la solicitud ' + numero + '; no se puede modificar la factibilidad.');
+    }
+
+    const ahora = new Date();
+    const url = r[COL_SOL.FACTIBILIDAD - 1];
+    registrarFactibilidad_(numero, respuestas.concat([
+      { pregunta: ENC_TYD_POR, respuesta: usuario },
+      { pregunta: ENC_TYD_FECHA, respuesta: ahora }
+    ]), url, ahora);
+
+    // Reescribe el archivo con la solicitud del PMO + la respuesta de T&D
+    const mapa = leerFactibilidad_()[numero];
+    const mat = getCatalogo_().filter(function (x) {
+      return norm_(x.d) === norm_(r[COL_SOL.MATERIAL - 1]) && x.t === r[COL_SOL.TIPO - 1] && x.s === r[COL_SOL.SUBFAMILIA - 1];
+    })[0] || { d: r[COL_SOL.MATERIAL - 1], t: r[COL_SOL.TIPO - 1], s: r[COL_SOL.SUBFAMILIA - 1], sn: '' };
+    actualizarArchivoFactibilidad_(url, null, {
+      numero: numero, proyecto: r[COL_SOL.PROYECTO - 1], solicitante: r[COL_SOL.SOLICITANTE - 1],
+      correo: r[COL_SOL.CORREO - 1], fecha: r[COL_SOL.FECHA - 1], material: mat,
+      respuestas: respuestasArchivo_(respuestasPmoGuardadas_(mapa), mapa),
+      exportacion: r[COL_SOL.EXPORTACION - 1] || 'No', produccion: r[COL_SOL.PRODUCCION - 1] || 'No'
+    });
+
+    if (estadoEtapa_(tyd, numero, r) === 'Pendiente') {
+      upsertEtapa_(tyd, numero, textoMaterial_(mat.d, mat.t, mat.s), url, 'En revisión',
+        'Factibilidad respondida', usuario, ahora);
+    }
+    sh.getRange(fila, COL_SOL.ACTUALIZADO).setValue(ahora);
+    registrarHistorial_(numero, 'T&D', 'Factibilidad respondida', '', usuario, ahora);
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
   }
   return listarSolicitudes_();
 }
@@ -467,6 +565,10 @@ function actualizarEtapa(numero, etapaId, estado, comentario) {
     }
     if (estadoEtapa_(etapa, numero, r) === 'Aprobado') {
       throw new Error(etapa.nombre + ' ya aprobó la solicitud ' + numero + '.');
+    }
+    if (etapa.id === 'TYD' && estado === 'Aprobado') {
+      const f = leerFactibilidad_()[numero];
+      if (!f || !f._tydPor) throw new Error('Antes de aprobar, T&D debe responder la factibilidad de ' + numero + '.');
     }
 
     const ahora = new Date();
@@ -623,18 +725,18 @@ function validarMaterial_(material, tipo, subfamilia) {
   return exacto;
 }
 
-function validarFactibilidad_(entrada) {
-  return PREGUNTAS_FACTIBILIDAD.map(function (p) {
+function validarRespuestas_(preguntas, entrada, etiqueta) {
+  return preguntas.map(function (p) {
     if (p.depende && String(entrada[p.depende.id] || '').trim() !== p.depende.valor) {
       return { id: p.id, pregunta: p.texto, respuesta: 'N/A', seccion: p.seccion };
     }
     const valor = String(entrada[p.id] == null ? '' : entrada[p.id]).trim();
-    if (p.requerida && !valor) throw new Error('Factibilidad: falta responder "' + p.texto + '".');
+    if (p.requerida && !valor) throw new Error(etiqueta + ': falta responder "' + p.texto + '".');
     if (valor && p.tipo === 'number' && isNaN(Number(valor.replace(',', '.')))) {
-      throw new Error('Factibilidad: "' + p.texto + '" debe ser numérico.');
+      throw new Error(etiqueta + ': "' + p.texto + '" debe ser numérico.');
     }
     if (valor && p.tipo === 'select' && p.opciones.indexOf(valor) < 0) {
-      throw new Error('Factibilidad: respuesta no válida en "' + p.texto + '".');
+      throw new Error(etiqueta + ': respuesta no válida en "' + p.texto + '".');
     }
     return { id: p.id, pregunta: p.texto, respuesta: valor, seccion: p.seccion };
   });
@@ -675,7 +777,7 @@ function crearArchivoFactibilidad_(carpeta, info) {
 /** Reescribe el archivo de factibilidad existente (edición del PMO) y lo mueve a `carpeta`. */
 function actualizarArchivoFactibilidad_(url, carpeta, info) {
   const m = String(url || '').match(/\/d\/([-\w]{20,})/);
-  if (!m) return crearArchivoFactibilidad_(carpeta, info);
+  if (!m) return carpeta ? crearArchivoFactibilidad_(carpeta, info) : null;
   const libro = SpreadsheetApp.openById(m[1]);
   const sh = libro.getSheetByName('Factibilidad') || libro.getSheets()[0];
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
@@ -683,8 +785,35 @@ function actualizarArchivoFactibilidad_(url, carpeta, info) {
   escribirFactibilidad_(sh, info);
   libro.rename(nombreFactibilidad_(info));
   const archivo = DriveApp.getFileById(m[1]);
-  archivo.moveTo(carpeta);
+  if (carpeta) archivo.moveTo(carpeta);
   return archivo;
+}
+
+/**
+ * Respuestas para el archivo: las del PMO y, si T&D ya respondió, la factibilidad técnica.
+ * `mapa` = fila de la hoja Factibilidad ({ idPregunta: valor, _tydPor, _tydFecha }).
+ */
+function respuestasArchivo_(respuestasPmo, mapa) {
+  const lista = respuestasPmo.slice();
+  const S_TYD = 'Factibilidad T&D';
+  if (mapa && mapa._tydPor) {
+    lista.push({ pregunta: 'Respondida por', respuesta: mapa._tydPor, seccion: S_TYD });
+    lista.push({ pregunta: 'Fecha respuesta', respuesta: mapa._tydFecha || '', seccion: S_TYD });
+    PREGUNTAS_FACTIBILIDAD.forEach(function (p) {
+      lista.push({ pregunta: p.texto, respuesta: mapa[p.id] || '', seccion: S_TYD + ' · ' + p.seccion });
+    });
+  } else {
+    lista.push({ pregunta: 'Estado', respuesta: 'Pendiente de respuesta de T&D', seccion: S_TYD });
+  }
+  return lista;
+}
+
+/** Respuestas del PMO guardadas, en el formato de validarRespuestas_. */
+function respuestasPmoGuardadas_(mapa) {
+  mapa = mapa || {};
+  return PREGUNTAS_PMO.map(function (p) {
+    return { id: p.id, pregunta: p.texto, respuesta: mapa[p.id] || '', seccion: p.seccion };
+  });
 }
 
 function nombreFactibilidad_(info) {
@@ -798,7 +927,10 @@ function listarSolicitudes_() {
           };
         }),
         historial: historial[numero] || [],
-        factibilidad: respuestas[numero] || {}
+        factibilidad: respuestas[numero] || {},
+        tydRespondida: !!(respuestas[numero] && respuestas[numero]._tydPor),
+        tydPor: respuestas[numero] ? respuestas[numero]._tydPor : '',
+        tydFecha: respuestas[numero] ? respuestas[numero]._tydFecha : ''
       };
     })
     .reverse();
@@ -822,7 +954,7 @@ function leerEtapa_(etapa) {
   return mapa;
 }
 
-/** Respuestas de factibilidad por solicitud: { 'SOL-0001': { idPregunta: valor } } */
+/** Respuestas por solicitud (PMO y T&D): { 'SOL-0001': { idPregunta: valor, _tydPor, _tydFecha } } */
 function leerFactibilidad_() {
   const sh = ss_().getSheetByName(CONFIG.HOJAS.FACTIBILIDAD);
   const mapa = {};
@@ -833,7 +965,10 @@ function leerFactibilidad_() {
     const num = String(r[0]).trim();
     if (!num) return;
     const x = {};
-    PREGUNTAS_FACTIBILIDAD.forEach(function (p) {
+    const iPor = enc.indexOf(limpiar_(ENC_TYD_POR)), iFecha = enc.indexOf(limpiar_(ENC_TYD_FECHA));
+    x._tydPor = iPor >= 0 ? String(r[iPor] || '') : '';
+    x._tydFecha = iFecha >= 0 ? fecha_(r[iFecha]) : '';
+    PREGUNTAS_PMO.concat(PREGUNTAS_FACTIBILIDAD).forEach(function (p) {
       const i = enc.indexOf(limpiar_(p.texto));
       if (i < 0) return;
       let val = r[i];

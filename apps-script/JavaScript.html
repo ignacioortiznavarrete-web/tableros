@@ -192,6 +192,66 @@
       '</div>';
   }
 
+  /**
+   * Campos de un cuestionario agrupados por sección. `valores` = { idPregunta: valor }.
+   * Las preguntas con `depende` quedan ocultas hasta que la pregunta madre tenga ese valor.
+   */
+  function preguntasHtml(preguntas, valores) {
+    function previo(id) {
+      const x = valores[id] == null ? '' : String(valores[id]);
+      return x === 'N/A' ? '' : x;
+    }
+    let seccionActual = null;
+    return preguntas.map(function (p) {
+      const req = p.requerida ? ' <span class="req">*</span>' : '';
+      const full = p.tipo === 'textarea' ? ' full' : '';
+      let titulo = '';
+      if (p.seccion !== seccionActual) {
+        titulo = (seccionActual === null ? '' : '</div>') +
+          '<div class="section-title">' + esc(p.seccion || 'Preguntas') + '</div><div class="fields">';
+        seccionActual = p.seccion;
+      }
+      const dep = p.depende ? ' data-dep="' + esc(p.depende.id) + '" data-dep-valor="' + esc(p.depende.valor) + '"' +
+        (previo(p.depende.id) === p.depende.valor ? '' : ' hidden') : '';
+      const actual = previo(p.id);
+      let control;
+      if (p.tipo === 'select') {
+        control = '<select class="select" name="f_' + p.id + '"><option value="">Selecciona…</option>' +
+          p.opciones.map(function (o) { return '<option' + (actual === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
+      } else if (p.tipo === 'textarea') {
+        control = '<textarea class="textarea" name="f_' + p.id + '">' + esc(actual) + '</textarea>';
+      } else {
+        control = '<input class="input" type="' + (p.tipo === 'number' ? 'number' : p.tipo) +
+          '" step="any" name="f_' + p.id + '" value="' + esc(actual) + '">';
+      }
+      return titulo + '<div class="field' + full + '"' + dep + '><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
+    }).join('') + (seccionActual === null ? '' : '</div>');
+  }
+
+  /** Muestra u oculta las preguntas dependientes del formulario. */
+  function activarDependencias(form) {
+    function actualizar() {
+      form.querySelectorAll('[data-dep]').forEach(function (f) {
+        const padre = form.elements['f_' + f.dataset.dep];
+        f.hidden = !padre || padre.value !== f.dataset.depValor;
+      });
+    }
+    form.addEventListener('change', function (ev) {
+      if (ev.target.name && ev.target.name.indexOf('f_') === 0) actualizar();
+    });
+    form.addEventListener('reset', function () { setTimeout(actualizar, 0); });
+  }
+
+  /** Lee las respuestas visibles y marca las obligatorias vacías. */
+  function recolectar(form, preguntas, destino, marcar) {
+    preguntas.forEach(function (p) {
+      const c = form.elements['f_' + p.id];
+      const oculto = c.closest('.field').hidden;
+      destino[p.id] = oculto ? '' : c.value;
+      if (!oculto && p.requerida && !String(c.value).trim()) marcar(c, p.texto);
+    });
+  }
+
   /** Formulario de solicitud. Si se pasa `sol`, es el formulario de edición del PMO. */
   function formularioHtml(sol) {
     const d = APP.data;
@@ -203,35 +263,7 @@
         return '<option' + (actual === o ? ' selected' : '') + '>' + o + '</option>';
       }).join('');
     }
-    function valorPrevio(id) {
-      const x = ed ? (sol.factibilidad[id] || '') : '';
-      return x === 'N/A' ? '' : x;
-    }
-    let seccionActual = null;
-    const preguntas = d.preguntas.map(function (p) {
-      const req = p.requerida ? ' <span class="req">*</span>' : '';
-      const full = p.tipo === 'textarea' ? ' full' : '';
-      let titulo = '';
-      if (p.seccion !== seccionActual) {
-        titulo = (seccionActual === null ? '' : '</div>') +
-          '<div class="section-title">' + esc(p.seccion || 'Factibilidad') + '</div><div class="fields">';
-        seccionActual = p.seccion;
-      }
-      const dep = p.depende ? ' data-dep="' + esc(p.depende.id) + '" data-dep-valor="' + esc(p.depende.valor) + '"' +
-        (valorPrevio(p.depende.id) === p.depende.valor ? '' : ' hidden') : '';
-      let control;
-      const actual = valorPrevio(p.id);
-      if (p.tipo === 'select') {
-        control = '<select class="select" name="f_' + p.id + '"><option value="">Selecciona…</option>' +
-          p.opciones.map(function (o) { return '<option' + (actual === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
-      } else if (p.tipo === 'textarea') {
-        control = '<textarea class="textarea" name="f_' + p.id + '">' + esc(actual) + '</textarea>';
-      } else {
-        control = '<input class="input" type="' + (p.tipo === 'number' ? 'number' : p.tipo) +
-          '" step="any" name="f_' + p.id + '"' + v(actual) + '>';
-      }
-      return titulo + '<div class="field' + full + '"' + dep + '><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
-    }).join('') + (seccionActual === null ? '' : '</div>');
+    const preguntas = preguntasHtml(d.preguntasPmo, ed ? sol.factibilidad : {});
 
     const descripciones = unicos(d.catalogo.map(function (x) { return x.d; })).sort();
 
@@ -346,17 +378,7 @@
     form.addEventListener('reset', function () { setTimeout(onMaterial, 0); });
     form.addEventListener('submit', enviarSolicitud);
 
-    // Preguntas que dependen de otra (ej. "Tipo de Pigmento" sólo si "¿Tiene Pigmento?" = SI)
-    function onDependencias() {
-      form.querySelectorAll('[data-dep]').forEach(function (f) {
-        const padre = form.elements['f_' + f.dataset.dep];
-        f.hidden = !padre || padre.value !== f.dataset.depValor;
-      });
-    }
-    form.addEventListener('change', function (ev) {
-      if (ev.target.name && ev.target.name.indexOf('f_') === 0) onDependencias();
-    });
-    form.addEventListener('reset', function () { setTimeout(onDependencias, 0); });
+    activarDependencias(form);
 
     if (sol) {   // edición: precargar la combinación guardada
       onMaterial();
@@ -378,7 +400,7 @@
       subfamilia: el.subfamilia.value,
       exportacion: el.exportacion.value,
       produccion: el.produccion.value,
-      factibilidad: {}
+      respuestas: {}
     };
 
     // Validación en el cliente (el servidor vuelve a validar todo)
@@ -397,12 +419,7 @@
       if (!datos.tipo) el.tipo.classList.add('invalid');
       if (!datos.subfamilia) el.subfamilia.classList.add('invalid');
     }
-    APP.data.preguntas.forEach(function (p) {
-      const c = el['f_' + p.id];
-      const oculto = c.closest('.field').hidden;
-      datos.factibilidad[p.id] = oculto ? '' : c.value;
-      if (!oculto && p.requerida && !String(c.value).trim()) marcar(c, p.texto);
-    });
+    recolectar(form, APP.data.preguntasPmo, datos.respuestas, marcar);
     if (faltan.length) {
       toast('Revisa los campos: ' + faltan.join(', '), 'bad');
       const primero = form.querySelector('.invalid');
@@ -447,7 +464,7 @@
     m.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' +
       '<div class="check">✓</div><h3>Solicitud ingresada</h3>' +
       '<div class="num">' + esc(res.numero) + '</div>' +
-      '<p>Se creó el archivo de factibilidad y quedó pendiente de revisión del PMO.</p>' +
+      '<p>Se creó el archivo de factibilidad con la solicitud del PMO. T&D completará la factibilidad técnica en Liberaciones.</p>' +
       '<div class="row">' +
         '<a class="btn btn-ghost" target="_blank" href="' + esc(res.carpetaUrl) + '">Abrir carpeta</a>' +
         '<a class="btn btn-ghost" target="_blank" href="' + esc(res.factibilidadUrl) + '">Ver factibilidad</a>' +
@@ -484,6 +501,64 @@
       if (ev.target === m || ev.target.closest('[data-cancelar]')) m.hidden = true;
     };
     initFormulario(document.getElementById('form-sol-e'), s);
+  }
+
+  function abrirFactibilidad(num) {
+    const s = APP.data.solicitudes.filter(function (x) { return x.numero === num; })[0];
+    if (!s) return;
+    const resumenPmo = APP.data.preguntasPmo.map(function (p) {
+      const v = s.factibilidad[p.id];
+      if (!v || v === 'N/A') return '';
+      return '<div class="kv"><span>' + esc(p.texto) + '</span><b>' + esc(v) + '</b></div>';
+    }).join('');
+    const m = document.getElementById('modal');
+    m.innerHTML = '<div class="modal wide" role="dialog" aria-modal="true">' +
+      '<div class="modal-head"><div><div class="req-num">' + esc(s.numero) + ' · ' + esc(s.proyecto) + '</div>' +
+        '<h3>Factibilidad técnica (T&D)</h3></div>' +
+        '<button class="btn btn-ghost btn-sm" data-cancelar aria-label="Cerrar">✕</button></div>' +
+      '<div class="card-body">' +
+        '<details class="more" open><summary>Solicitud del PMO</summary>' +
+          '<div class="kvs"><div class="kv"><span>Material</span><b>' + esc(s.material + ' · ' + s.tipo + ' · ' + s.subfamilia) + '</b></div>' +
+          '<div class="kv"><span>Solicitante</span><b>' + esc(s.solicitante) + '</b></div>' + resumenPmo + '</div>' +
+        '</details>' +
+        (s.tydRespondida ? '<div class="notice" style="margin-top:14px">Respondida por ' + esc(s.tydPor) + ' · ' + esc(s.tydFecha) +
+          '. Puedes actualizar las respuestas mientras T&D no apruebe.</div>' : '') +
+      '</div>' +
+      '<form class="card-body" id="form-tyd" data-num="' + esc(s.numero) + '" autocomplete="off" novalidate>' +
+        preguntasHtml(APP.data.preguntas, s.factibilidad) +
+        '<div class="actions"><button type="button" class="btn btn-ghost" data-cancelar>Cancelar</button>' +
+        '<button type="submit" class="btn btn-primary">Guardar factibilidad</button></div>' +
+      '</form></div>';
+    m.hidden = false;
+    m.onclick = function (ev) {
+      if (ev.target === m || ev.target.closest('[data-cancelar]')) m.hidden = true;
+    };
+    const form = document.getElementById('form-tyd');
+    activarDependencias(form);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const faltan = [];
+      form.querySelectorAll('.invalid').forEach(function (x) { x.classList.remove('invalid'); });
+      const respuestas = {};
+      recolectar(form, APP.data.preguntas, respuestas, function (c, t) { c.classList.add('invalid'); faltan.push(t); });
+      if (faltan.length) {
+        toast('Faltan respuestas: ' + faltan.join(', '), 'bad');
+        form.querySelector('.invalid').focus();
+        return;
+      }
+      const btn = form.querySelector('[type=submit]');
+      cargando(btn, true, 'Guardando…');
+      google.script.run
+        .withSuccessHandler(function (lista) {
+          m.hidden = true;
+          APP.data.solicitudes = lista;
+          APP.foco = num;
+          render();
+          toast(num + ': factibilidad guardada en el archivo', 'ok');
+        })
+        .withFailureHandler(function (err) { cargando(btn, false); errorToast(err); })
+        .responderFactibilidad(num, respuestas);
+    });
   }
 
   /* ---------- Vista: Etapa ---------- */
@@ -563,6 +638,8 @@
       (s.carpetaUrl ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.carpetaUrl) + '">📁 Carpeta</a>' : '') +
       (s.griffing ? '<a class="btn btn-ghost btn-sm" target="_blank" href="' + esc(s.griffing) + '">Griffing</a>' : '') +
       (esMio('PMO') ? '<button class="btn btn-ghost btn-sm" data-editar="' + esc(s.numero) + '">✎ Editar solicitud</button>' : '') +
+      (esMio('TYD') && pendienteEn(s, 'TYD') ? '<button class="btn btn-primary btn-sm" data-factibilidad="' + esc(s.numero) + '">' +
+        (s.tydRespondida ? '📝 Actualizar factibilidad' : '📝 Responder factibilidad') + '</button>' : '') +
       '</div>';
 
     const puedeActuar = APP.vista !== 'SOLICITUD' && pendienteEn(s, vista) && esMio(vista);
@@ -576,6 +653,7 @@
         return !p.condicion || s[p.condicion];
       })[0];
       accion = '<form class="act" data-num="' + esc(s.numero) + '" data-etapa="' + esc(vista) + '">' +
+        (vista === 'TYD' && !s.tydRespondida ? '<div class="notice warn" style="margin-bottom:10px">Para aprobar, primero responde la factibilidad técnica (botón <b>📝 Responder factibilidad</b>).</div>' : '') +
         '<div class="act-title">✎ Actualizar etapa ' + esc(etapa(vista).nombre) + '</div>' +
         '<div class="fields">' +
           '<div class="field"><label>Estado</label><select class="select" name="estado">' +
@@ -619,6 +697,7 @@
           '<span>Solicitante: <b>' + esc(s.solicitante) + '</b></span>' +
           '<span>' + esc(s.fecha) + '</span>' +
           (s.exportacion ? '<span class="tag">Exportación</span>' : '') +
+          '<span class="tag ' + (s.tydRespondida ? 'ok' : 'warn') + '">Factibilidad T&D: ' + (s.tydRespondida ? 'respondida' : 'pendiente') + '</span>' +
           (s.produccion ? '<span class="tag">Producción</span>' : '') +
         '</div></div>' +
         '<span class="pill ' + clasePill(s.estado) + '">' + esc(s.estado) + '</span>' +
@@ -640,6 +719,8 @@
     if (ev.target.closest('[data-refrescar]')) { refrescar(); return; }
     const ed = ev.target.closest('[data-editar]');
     if (ed) { abrirEdicion(ed.dataset.editar); return; }
+    const fa = ev.target.closest('[data-factibilidad]');
+    if (fa) { abrirFactibilidad(fa.dataset.factibilidad); return; }
     const ir = ev.target.closest('[data-ir]');
     if (ir) {
       const s = APP.data.solicitudes.filter(function (x) { return x.numero === ir.dataset.ir; })[0];
