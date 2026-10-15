@@ -53,10 +53,16 @@ Todo se registra en la planilla *Tableros*.
   la solicitud **no se guarda**. Se valida en la interfaz (listas en cascada) y nuevamente en el servidor.
   Si se modifica `Reglas`, ejecutar `refrescarCatalogo` (o esperar 10 min de caché).
 - **Número de solicitud** correlativo: `SOL-0001`, `SOL-0002`, …
-- **Factibilidad**: las preguntas se configuran en `PREGUNTAS_FACTIBILIDAD` (`Code.gs`).
-  Se crea un Google Sheet `Factibilidad SOL-XXXX - <Proyecto>` en
-  `Carpeta Factibilidad / <Solicitante> / <Proyecto>`. Las carpetas del solicitante y del proyecto
-  se reutilizan si ya existen. Las respuestas también quedan en la hoja `Factibilidad`.
+- **Factibilidad**: las preguntas vienen de la hoja *Planilla factibilidad téc. V1*
+  (`1_Solicitud_Nuevos_Productos_V5.xlsx`), agrupadas en **Factibilidad técnica** y **Valor agregado**,
+  y se configuran en `PREGUNTAS_FACTIBILIDAD` (`Code.gs`). Las preguntas dependientes (Tipo de Pigmento,
+  Tipo de Aditivo, Medidas/Destino del Coproducto) sólo aparecen si la pregunta madre es *SI*; si no, se
+  guardan como *N/A*. Se crea un Google Sheet `Factibilidad SOL-XXXX - <Proyecto>` en
+  `Carpeta Factibilidad / <Solicitante> / <Proyecto>` (las carpetas se reutilizan si ya existen) y las
+  respuestas quedan en la hoja `Factibilidad` (una columna por pregunta, buscada por su encabezado).
+  - *Pendiente*: los campos en amarillo de la planilla (Tipo de material, Familia, Subfamilia, Emisión,
+    Terminación, 1 o 2 caras, Diseño, Espesor, Ancho, Largo) se buscarán en catálogos en una etapa
+    posterior; Acabado y Marca serán automáticos.
 - **Hojas**: la solicitud se guarda en `Solicitudes PMO` (columnas *Exportación* y *Requiere producción*
   al final); cada etapa escribe su fila en `Costos`, `T&D`, `Planificacion`, `Produccion`,
   `Operaciones` y `Exportacion`; todos los movimientos quedan en `Historial`.

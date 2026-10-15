@@ -65,21 +65,72 @@ const ALIAS_PASO = { COSTOS: 'LIBERACIONES' };
 const ESTADOS = ['Pendiente', 'En revisión', 'Aprobado', 'Rechazado'];
 
 /**
- * Preguntas de factibilidad. Edita libremente esta lista:
- * tipo: 'text' | 'number' | 'date' | 'select' | 'textarea'
+ * Preguntas de factibilidad: hoja "Planilla factibilidad téc. V1" de
+ * 1_Solicitud_Nuevos_Productos_V5.xlsx.
+ *   tipo:      'text' | 'number' | 'date' | 'select' | 'textarea'
+ *   seccion:   agrupa las preguntas en el formulario y en el archivo.
+ *   depende:   la pregunta sólo se muestra/exige si otra tiene ese valor.
+ *
+ * PENDIENTE (celdas en amarillo de la planilla = se buscarán en catálogos más adelante):
+ *   Tipo de material, Familia, Subfamilia, Emisión, Terminación, 1 o 2 caras, Diseño,
+ *   Espesor (mm), Ancho (mm), Largo (mm).
+ *   Acabado y Marca son "Automático" (se derivan del material).
+ *   Tipo de material y Subfamilia ya se capturan hoy con la validación contra "Reglas".
  */
+const SI_NO = ['SI', 'NO'];
+const CENTROS = ['TCP1_Maderas Cabrero', 'TCP5_Tableros Mapal', 'TCP7_Tableros Cabrero'];
+const S_TEC = 'Factibilidad técnica';
+const S_VA = 'Valor agregado';
+
 const PREGUNTAS_FACTIBILIDAD = [
-  { id: 'cliente',      texto: 'Cliente / mercado de destino',                    tipo: 'text',     requerida: true },
-  { id: 'volumen',      texto: 'Volumen estimado mensual (m³)',                   tipo: 'number',   requerida: true },
-  { id: 'espesor',      texto: 'Espesor requerido (mm)',                          tipo: 'number',   requerida: true },
-  { id: 'formato',      texto: 'Formato / dimensiones (ej. 1830 x 2500)',         tipo: 'text',     requerida: true },
-  { id: 'certificacion',texto: '¿Requiere certificación?',                        tipo: 'select',   requerida: true,
-    opciones: ['No', 'FSC', 'EPA / TSCA', 'FSC + EPA / TSCA'] },
-  { id: 'similar',      texto: '¿Existe hoy un material similar en el portafolio?', tipo: 'select', requerida: true,
-    opciones: ['Sí', 'No', 'No sé'] },
-  { id: 'planta',       texto: 'Planta / línea sugerida',                         tipo: 'text',     requerida: false },
-  { id: 'fecha',        texto: 'Fecha requerida',                                 tipo: 'date',     requerida: true },
-  { id: 'observaciones',texto: 'Observaciones',                                   tipo: 'textarea', requerida: false }
+  { id: 'inversion',      seccion: S_TEC, texto: '¿Requiere inversión?',                         tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'factible',       seccion: S_TEC, texto: '¿Es factible de fabricar?',                    tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'centro',         seccion: S_TEC, texto: '¿Propuesta de Centro Productivo?',             tipo: 'select', opciones: CENTROS, requerida: true },
+  { id: 'loteMinimo',     seccion: S_TEC, texto: '¿Cuál es el Lote mínimo de fabricación?',      tipo: 'text',   requerida: true },
+  { id: 'unidad',         seccion: S_TEC, texto: '¿En qué Unidades de medición?',                tipo: 'select', requerida: true,
+    opciones: ['M2', 'M3', 'ML', 'Unidades', 'Kit'] },
+  { id: 'tipoProducto',   seccion: S_TEC, texto: 'Tipo de producto',                             tipo: 'select', requerida: true,
+    opciones: ['Enchapados', 'Desnudo', 'Madera', 'Melamínico', 'Melamínico/Pigmentado', 'Molduras', 'Pigmentado',
+               'Pintado', 'Pintado/Pigmentado', 'Otro'] },
+  { id: 'tiempoDias',     seccion: S_TEC, texto: 'Tiempo estimado de fabricación en días',       tipo: 'number', requerida: true },
+  { id: 'densidad',       seccion: S_TEC, texto: 'Densidad Producto Final',                      tipo: 'number', requerida: true },
+  { id: 'textura',        seccion: S_TEC, texto: 'Textura ¿es homologable a alguna parecida?',   tipo: 'select', requerida: false,
+    opciones: ['Sin Textura - 0', 'Basic - B', 'Liso - L', 'Liso Brillo - LB', 'Mate Basic - MB', 'Natural MATT - NM',
+               'Naturale - NT', 'Poro Natural - P1', 'Soft - S', 'Softwood - SW', 'Textone - TS'] },
+  { id: 'perdidaVA',      seccion: S_TEC, texto: '¿Hay pérdida en etapa de Valor Agregado?',     tipo: 'text',   requerida: false },
+  { id: 'perdidaLaminas', seccion: S_TEC, texto: '¿Informa a Costos % de Pérdida Láminas u otro producto?', tipo: 'text', requerida: false },
+  { id: 'comentarios',    seccion: S_TEC, texto: 'Comentarios y especificaciones adicionales (ej. Overlay, laca, etc.)', tipo: 'textarea', requerida: false },
+  { id: 'embalajeTexto',  seccion: S_TEC, texto: '¿Tiene especificaciones especiales de Embalaje?', tipo: 'textarea', requerida: false },
+  { id: 'certificaciones',seccion: S_TEC, texto: '¿Requiere Certificaciones (especificar)?',     tipo: 'select', requerida: true,
+    opciones: ['No requiere', 'Gestión de Calidad', 'Medio Ambientales', 'Maderas Bosques'] },
+  { id: 'fechaMuestras',  seccion: S_TEC, texto: 'Fecha de entrega de muestras',                 tipo: 'date',   requerida: true },
+
+  { id: 'centroSustrato', seccion: S_VA, texto: '¿Propuesta de Centro Productivo? (sustrato)',   tipo: 'select', opciones: CENTROS, requerida: true },
+  { id: 'resina',         seccion: S_VA, texto: '¿Resina a utilizar (Código)?',                  tipo: 'text',   requerida: false },
+  { id: 'pigmento',       seccion: S_VA, texto: '¿Tiene Pigmento?',                              tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'tipoPigmento',   seccion: S_VA, texto: 'Tipo de Pigmento',                              tipo: 'text',   requerida: true,
+    depende: { id: 'pigmento', valor: 'SI' } },
+  { id: 'aditivo',        seccion: S_VA, texto: '¿Tiene Aditivo Especial? (ej. antihongo)',      tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'tipoAditivo',    seccion: S_VA, texto: 'Tipo de Aditivo',                               tipo: 'text',   requerida: true,
+    depende: { id: 'aditivo', valor: 'SI' } },
+  { id: 'hr',             seccion: S_VA, texto: '¿Es HR?',                                       tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'pintura',        seccion: S_VA, texto: '¿Tiene Pintura?',                               tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'colorPortafolio',seccion: S_VA, texto: '¿Es Color del Portafolio Masisa?',              tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'colorNuevo',     seccion: S_VA, texto: '¿Es Color completamente nuevo?',                tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'colorHomolog',   seccion: S_VA, texto: '¿Es Color de Homologación?',                    tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'mezclaMadera',   seccion: S_VA, texto: '¿Tiene Mezcla de Madera?',                      tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'coproducto',     seccion: S_VA, texto: '¿Tiene Coproducto?',                            tipo: 'select', opciones: SI_NO, requerida: true },
+  { id: 'coproducto1',    seccion: S_VA, texto: 'Medidas Coproducto 1',                          tipo: 'number', requerida: true,
+    depende: { id: 'coproducto', valor: 'SI' } },
+  { id: 'coproducto2',    seccion: S_VA, texto: 'Medidas Coproducto 2',                          tipo: 'number', requerida: false,
+    depende: { id: 'coproducto', valor: 'SI' } },
+  { id: 'coproducto3',    seccion: S_VA, texto: 'Medidas Coproducto 3',                          tipo: 'number', requerida: false,
+    depende: { id: 'coproducto', valor: 'SI' } },
+  { id: 'destinoCoprod',  seccion: S_VA, texto: 'Destino del Coproducto',                        tipo: 'textarea', requerida: true,
+    depende: { id: 'coproducto', valor: 'SI' } },
+  { id: 'perdidaSustrato',seccion: S_VA, texto: '¿Informa a Costos % de Pérdida Sustrato?',      tipo: 'number', requerida: false },
+  { id: 'embalajeVA',     seccion: S_VA, texto: '¿Tiene especificaciones especiales de Embalaje? (valor agregado)', tipo: 'select',
+    opciones: SI_NO, requerida: true }
 ];
 
 /* ---------- Estructura de columnas ---------- */
@@ -574,6 +625,9 @@ function validarMaterial_(material, tipo, subfamilia) {
 
 function validarFactibilidad_(entrada) {
   return PREGUNTAS_FACTIBILIDAD.map(function (p) {
+    if (p.depende && String(entrada[p.depende.id] || '').trim() !== p.depende.valor) {
+      return { id: p.id, pregunta: p.texto, respuesta: 'N/A', seccion: p.seccion };
+    }
     const valor = String(entrada[p.id] == null ? '' : entrada[p.id]).trim();
     if (p.requerida && !valor) throw new Error('Factibilidad: falta responder "' + p.texto + '".');
     if (valor && p.tipo === 'number' && isNaN(Number(valor.replace(',', '.')))) {
@@ -582,7 +636,7 @@ function validarFactibilidad_(entrada) {
     if (valor && p.tipo === 'select' && p.opciones.indexOf(valor) < 0) {
       throw new Error('Factibilidad: respuesta no válida en "' + p.texto + '".');
     }
-    return { id: p.id, pregunta: p.texto, respuesta: valor };
+    return { id: p.id, pregunta: p.texto, respuesta: valor, seccion: p.seccion };
   });
 }
 
@@ -653,7 +707,15 @@ function escribirFactibilidad_(sh, info) {
     ['¿Requiere producción?', info.produccion],
     ['', ''],
     ['Pregunta', 'Respuesta']
-  ].concat(info.respuestas.map(function (r) { return [r.pregunta, seguro_(r.respuesta)]; }));
+  ];
+  let seccion = '';
+  info.respuestas.forEach(function (r) {
+    if (r.seccion && r.seccion !== seccion) {
+      seccion = r.seccion;
+      filas.push(['▸ ' + seccion.toUpperCase(), '']);
+    }
+    filas.push([r.pregunta, seguro_(r.respuesta)]);
+  });
 
   sh.getRange(1, 1, filas.length, 2).setValues(filas);
   sh.getRange('A1:B1').merge().setFontSize(16).setFontWeight('bold').setFontColor('#ffffff')
@@ -666,6 +728,11 @@ function escribirFactibilidad_(sh, info) {
   sh.getRange(filaPreguntas, 1, filas.length - filaPreguntas + 1, 2).setBorder(true, true, true, true, true, true, '#cbd5e1',
     SpreadsheetApp.BorderStyle.SOLID);
   sh.getRange(1, 1, filas.length, 2).setWrap(true).setVerticalAlignment('middle');
+  filas.forEach(function (f, i) {
+    if (String(f[0]).indexOf('▸ ') === 0) {
+      sh.getRange(i + 1, 1, 1, 2).setFontWeight('bold').setFontColor('#0f5c4a').setBackground('#e6f2ee');
+    }
+  });
   sh.setColumnWidth(1, 320);
   sh.setColumnWidth(2, 420);
   sh.setFrozenRows(1);
@@ -806,13 +873,28 @@ function upsertEtapa_(etapa, numero, materialTxt, factUrl, estado, comentario, r
   else sh.appendRow(valores);
 }
 
+/** Guarda las respuestas en la hoja Factibilidad buscando cada columna por su encabezado. */
 function registrarFactibilidad_(numero, respuestas, url, fecha) {
-  const enc = ['Solicitud'].concat(PREGUNTAS_FACTIBILIDAD.map(function (p) { return p.texto; }), ['Link archivo', 'Fecha']);
-  const sh = hoja_(CONFIG.HOJAS.FACTIBILIDAD, enc);
+  const sh = hoja_(CONFIG.HOJAS.FACTIBILIDAD, ['Solicitud']);
+  const nombres = ['Solicitud'].concat(respuestas.map(function (r) { return r.pregunta; }), ['Link archivo', 'Fecha']);
   const valores = [numero].concat(respuestas.map(function (r) { return seguro_(r.respuesta); }), [url, fecha]);
-  const fila = buscarFila_(sh, numero);
-  if (fila) sh.getRange(fila, 1, 1, valores.length).setValues([valores]);
-  else sh.appendRow(valores);
+
+  const ultimaCol = Math.max(sh.getLastColumn(), 1);
+  const enc = sh.getRange(1, 1, 1, ultimaCol).getValues()[0].map(limpiar_);
+  const faltantes = nombres.filter(function (n) { return enc.indexOf(limpiar_(n)) < 0; });
+  if (faltantes.length) {
+    if (sh.getMaxColumns() < enc.length + faltantes.length) {
+      sh.insertColumnsAfter(sh.getMaxColumns(), enc.length + faltantes.length - sh.getMaxColumns());
+    }
+    sh.getRange(1, enc.length + 1, 1, faltantes.length).setValues([faltantes]).setFontWeight('bold');
+    faltantes.forEach(function (n) { enc.push(limpiar_(n)); });
+  }
+
+  let fila = buscarFila_(sh, numero);
+  if (!fila) fila = sh.getLastRow() + 1;
+  const actual = sh.getRange(fila, 1, 1, enc.length).getValues()[0];
+  nombres.forEach(function (n, i) { actual[enc.indexOf(limpiar_(n))] = valores[i]; });
+  sh.getRange(fila, 1, 1, enc.length).setValues([actual]);
 }
 
 function registrarHistorial_(numero, etapa, estado, comentario, usuario, fecha) {
@@ -975,8 +1057,7 @@ function configurarHojas() {
   hoja_(CONFIG.HOJAS.SOLICITUDES, ENC_SOL);
   ETAPAS.forEach(function (e) { if (e.hoja) hoja_(e.hoja, ENC_ETAPA); });
   hoja_(CONFIG.HOJAS.HISTORIAL, ENC_HISTORIAL);
-  hoja_(CONFIG.HOJAS.FACTIBILIDAD,
-    ['Solicitud'].concat(PREGUNTAS_FACTIBILIDAD.map(function (p) { return p.texto; }), ['Link archivo', 'Fecha']));
+  hoja_(CONFIG.HOJAS.FACTIBILIDAD, ['Solicitud']);
   DriveApp.getFolderById(CONFIG.CARPETA_FACTIBILIDAD_ID).getName();
   return 'Hojas listas. Materiales en catálogo: ' + refrescarCatalogo();
 }

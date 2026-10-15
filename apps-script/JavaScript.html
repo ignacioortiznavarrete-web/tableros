@@ -203,11 +203,24 @@
         return '<option' + (actual === o ? ' selected' : '') + '>' + o + '</option>';
       }).join('');
     }
+    function valorPrevio(id) {
+      const x = ed ? (sol.factibilidad[id] || '') : '';
+      return x === 'N/A' ? '' : x;
+    }
+    let seccionActual = null;
     const preguntas = d.preguntas.map(function (p) {
       const req = p.requerida ? ' <span class="req">*</span>' : '';
       const full = p.tipo === 'textarea' ? ' full' : '';
+      let titulo = '';
+      if (p.seccion !== seccionActual) {
+        titulo = (seccionActual === null ? '' : '</div>') +
+          '<div class="section-title">' + esc(p.seccion || 'Factibilidad') + '</div><div class="fields">';
+        seccionActual = p.seccion;
+      }
+      const dep = p.depende ? ' data-dep="' + esc(p.depende.id) + '" data-dep-valor="' + esc(p.depende.valor) + '"' +
+        (valorPrevio(p.depende.id) === p.depende.valor ? '' : ' hidden') : '';
       let control;
-      const actual = ed ? (sol.factibilidad[p.id] || '') : '';
+      const actual = valorPrevio(p.id);
       if (p.tipo === 'select') {
         control = '<select class="select" name="f_' + p.id + '"><option value="">Selecciona…</option>' +
           p.opciones.map(function (o) { return '<option' + (actual === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
@@ -217,8 +230,8 @@
         control = '<input class="input" type="' + (p.tipo === 'number' ? 'number' : p.tipo) +
           '" step="any" name="f_' + p.id + '"' + v(actual) + '>';
       }
-      return '<div class="field' + full + '"><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
-    }).join('');
+      return titulo + '<div class="field' + full + '"' + dep + '><label>' + esc(p.texto) + req + '</label>' + control + '</div>';
+    }).join('') + (seccionActual === null ? '' : '</div>');
 
     const descripciones = unicos(d.catalogo.map(function (x) { return x.d; })).sort();
 
@@ -252,8 +265,7 @@
         '<div class="match" data-match>✓ <span></span></div>' +
       '</div>' +
 
-      '<div class="section-title">Factibilidad</div>' +
-      '<div class="fields">' + preguntas + '</div>' +
+      preguntas +
 
       '<div class="actions">' +
         (ed ? '<button type="button" class="btn btn-ghost" data-cancelar>Cancelar</button>' +
@@ -334,6 +346,18 @@
     form.addEventListener('reset', function () { setTimeout(onMaterial, 0); });
     form.addEventListener('submit', enviarSolicitud);
 
+    // Preguntas que dependen de otra (ej. "Tipo de Pigmento" sólo si "¿Tiene Pigmento?" = SI)
+    function onDependencias() {
+      form.querySelectorAll('[data-dep]').forEach(function (f) {
+        const padre = form.elements['f_' + f.dataset.dep];
+        f.hidden = !padre || padre.value !== f.dataset.depValor;
+      });
+    }
+    form.addEventListener('change', function (ev) {
+      if (ev.target.name && ev.target.name.indexOf('f_') === 0) onDependencias();
+    });
+    form.addEventListener('reset', function () { setTimeout(onDependencias, 0); });
+
     if (sol) {   // edición: precargar la combinación guardada
       onMaterial();
       selTipo.value = sol.tipo; onTipo();
@@ -375,8 +399,9 @@
     }
     APP.data.preguntas.forEach(function (p) {
       const c = el['f_' + p.id];
-      datos.factibilidad[p.id] = c.value;
-      if (p.requerida && !String(c.value).trim()) marcar(c, p.texto);
+      const oculto = c.closest('.field').hidden;
+      datos.factibilidad[p.id] = oculto ? '' : c.value;
+      if (!oculto && p.requerida && !String(c.value).trim()) marcar(c, p.texto);
     });
     if (faltan.length) {
       toast('Revisa los campos: ' + faltan.join(', '), 'bad');
